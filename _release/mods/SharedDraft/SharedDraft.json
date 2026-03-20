@@ -1,0 +1,11 @@
+{
+  "id": "SharedDraft",
+  "name": "Shared Draft - Multiplayer Card Reward Sharing",
+  "author": "guyinan",
+  "description": "Merges all players' card rewards into a shared pool after combat. Players pick from the combined pool, with Rock/Paper/Scissors resolving conflicts.",
+  "version": "v0.1.0",
+  "has_pck": false,
+  "has_dll": true,
+  "dependencies": [],
+  "affects_gameplay": true
+}

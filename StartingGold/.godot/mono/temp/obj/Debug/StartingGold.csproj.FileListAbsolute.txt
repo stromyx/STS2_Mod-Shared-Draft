@@ -1,0 +1,10 @@
+/Users/guyinan/CodeBuddy/20260316022439/StartingGold/.godot/mono/temp/obj/Debug/StartingGold.csproj.AssemblyReference.cache
+/Users/guyinan/CodeBuddy/20260316022439/StartingGold/.godot/mono/temp/obj/Debug/StartingGold.IgnoresAccessChecksTo.cs
+/Users/guyinan/CodeBuddy/20260316022439/StartingGold/.godot/mono/temp/obj/Debug/StartingGold.GeneratedMSBuildEditorConfig.editorconfig
+/Users/guyinan/CodeBuddy/20260316022439/StartingGold/.godot/mono/temp/obj/Debug/StartingGold.csproj.CoreCompileInputs.cache
+/Users/guyinan/CodeBuddy/20260316022439/StartingGold/.godot/mono/temp/bin/Debug/StartingGold.dll
+/Users/guyinan/CodeBuddy/20260316022439/StartingGold/.godot/mono/temp/bin/Debug/StartingGold.pdb
+/Users/guyinan/CodeBuddy/20260316022439/StartingGold/.godot/mono/temp/obj/Debug/StartingGold.dll
+/Users/guyinan/CodeBuddy/20260316022439/StartingGold/.godot/mono/temp/obj/Debug/refint/StartingGold.dll
+/Users/guyinan/CodeBuddy/20260316022439/StartingGold/.godot/mono/temp/obj/Debug/StartingGold.pdb
+/Users/guyinan/CodeBuddy/20260316022439/StartingGold/.godot/mono/temp/obj/Debug/ref/StartingGold.dll

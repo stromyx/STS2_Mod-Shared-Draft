@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "dgSpecHash": "EV9zRnP7mZ0=",
+  "success": true,
+  "projectFilePath": "/Users/guyinan/CodeBuddy/20260316022439/SharedDraft/SharedDraft.csproj",
+  "expectedPackageFiles": [
+    "/Users/guyinan/.nuget/packages/alchyr.sts2.baselib/0.1.6/alchyr.sts2.baselib.0.1.6.nupkg.sha512",
+    "/Users/guyinan/.nuget/packages/alchyr.sts2.modanalyzers/0.1.4/alchyr.sts2.modanalyzers.0.1.4.nupkg.sha512",
+    "/Users/guyinan/.nuget/packages/bepinex.assemblypublicizer.msbuild/0.4.3/bepinex.assemblypublicizer.msbuild.0.4.3.nupkg.sha512",
+    "/Users/guyinan/.nuget/packages/godotsharp/4.5.1/godotsharp.4.5.1.nupkg.sha512",
+    "/Users/guyinan/.nuget/packages/godotsharpeditor/4.5.1/godotsharpeditor.4.5.1.nupkg.sha512"
+  ],
+  "logs": []
+}

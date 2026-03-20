@@ -1,0 +1,21 @@
+# Release zip packages
+*.zip
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vs/
+*.user
+
+# Godot build artifacts
+.godot/
+bin/
+
+# .NET build artifacts
+obj/
+publish/
+Properties/
+packages/
+*.cache

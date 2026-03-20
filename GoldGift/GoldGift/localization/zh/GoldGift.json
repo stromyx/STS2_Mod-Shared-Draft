@@ -1,0 +1,18 @@
+{
+  "gold_gift_title": "赠送金币",
+  "gold_gift_button": "赠送金币",
+  "gold_gift_tooltip": "将金币赠送给其他玩家",
+  "gold_gift_select_player": "选择一位玩家：",
+  "gold_gift_amount": "金额：",
+  "gold_gift_custom": "自定义：",
+  "gold_gift_send": "发送金币",
+  "gold_gift_close": "关闭",
+  "gold_gift_your_gold": "你的金币：{0}",
+  "gold_gift_no_players": "没有找到其他玩家。",
+  "gold_gift_not_enough": "金币不足！你有 {0} 金币。",
+  "gold_gift_invalid_amount": "请输入有效金额。",
+  "gold_gift_cannot_find_char": "无法找到你的角色。",
+  "gold_gift_success": "成功赠送 {0} 金币！",
+  "gold_gift_failed": "赠送失败。",
+  "gold_gift_cannot_self": "不能赠送给自己。"
+}

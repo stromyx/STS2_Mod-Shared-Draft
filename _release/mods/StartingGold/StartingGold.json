@@ -1,0 +1,11 @@
+{
+  "id": "StartingGold",
+  "name": "Starting Gold 900",
+  "author": "guyinan",
+  "description": "Sets starting gold to 900 for all characters in single-player mode.",
+  "version": "v0.1.0",
+  "has_pck": false,
+  "has_dll": true,
+  "dependencies": [],
+  "affects_gameplay": true
+}

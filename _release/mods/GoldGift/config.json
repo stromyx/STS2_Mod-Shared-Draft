@@ -1,0 +1,10 @@
+{
+  "id": "GoldGiftConfig",
+  "DefaultGiftAmount": 25,
+  "MinGiftAmount": 1,
+  "MaxGiftAmount": 999,
+  "QuickAmounts": [10, 25, 50, 100],
+  "DebugMode": false,
+  "DebugPlayerCount": 3,
+  "DebugStartingGold": 200
+}

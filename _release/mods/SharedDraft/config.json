@@ -1,0 +1,9 @@
+{
+  "id": "SharedDraftConfig",
+  "DebugMode": false,
+  "DebugPlayerCount": 2,
+  "DebugAiDelaySeconds": 1.5,
+  "ShowCardOwnership": true,
+  "AllowCrossClassPicks": true,
+  "ReadyTimeoutSeconds": 60
+}

@@ -1,0 +1,10 @@
+/Users/guyinan/CodeBuddy/20260316022439/SharedDraft/.godot/mono/temp/obj/Debug/SharedDraft.csproj.AssemblyReference.cache
+/Users/guyinan/CodeBuddy/20260316022439/SharedDraft/.godot/mono/temp/obj/Debug/SharedDraft.IgnoresAccessChecksTo.cs
+/Users/guyinan/CodeBuddy/20260316022439/SharedDraft/.godot/mono/temp/obj/Debug/SharedDraft.GeneratedMSBuildEditorConfig.editorconfig
+/Users/guyinan/CodeBuddy/20260316022439/SharedDraft/.godot/mono/temp/obj/Debug/SharedDraft.csproj.CoreCompileInputs.cache
+/Users/guyinan/CodeBuddy/20260316022439/SharedDraft/.godot/mono/temp/bin/Debug/SharedDraft.dll
+/Users/guyinan/CodeBuddy/20260316022439/SharedDraft/.godot/mono/temp/bin/Debug/SharedDraft.pdb
+/Users/guyinan/CodeBuddy/20260316022439/SharedDraft/.godot/mono/temp/obj/Debug/SharedDraft.dll
+/Users/guyinan/CodeBuddy/20260316022439/SharedDraft/.godot/mono/temp/obj/Debug/refint/SharedDraft.dll
+/Users/guyinan/CodeBuddy/20260316022439/SharedDraft/.godot/mono/temp/obj/Debug/SharedDraft.pdb
+/Users/guyinan/CodeBuddy/20260316022439/SharedDraft/.godot/mono/temp/obj/Debug/ref/SharedDraft.dll

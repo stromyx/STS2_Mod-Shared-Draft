@@ -1,0 +1,18 @@
+{
+  "gold_gift_title": "Gift Gold",
+  "gold_gift_button": "Gift Gold",
+  "gold_gift_tooltip": "Send gold to another player",
+  "gold_gift_select_player": "Select a player:",
+  "gold_gift_amount": "Amount:",
+  "gold_gift_custom": "Custom:",
+  "gold_gift_send": "Send Gold",
+  "gold_gift_close": "Close",
+  "gold_gift_your_gold": "Your Gold: {0}",
+  "gold_gift_no_players": "No other players found.",
+  "gold_gift_not_enough": "Not enough gold! You have {0}g.",
+  "gold_gift_invalid_amount": "Please enter a valid amount.",
+  "gold_gift_cannot_find_char": "Cannot find your character.",
+  "gold_gift_success": "Sent {0}g successfully!",
+  "gold_gift_failed": "Failed to send gold.",
+  "gold_gift_cannot_self": "Cannot gift gold to yourself."
+}
