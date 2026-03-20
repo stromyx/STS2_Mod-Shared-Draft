@@ -753,28 +753,120 @@ public class SharedDraftManager
     /// </summary>
     public bool HasRegisteredRewards()
     {
-        return Phase != DraftPhase.Inactive && Phase != DraftPhase.Collecting && _draftPool.Count > 0;
+        bool result = Phase != DraftPhase.Inactive && Phase != DraftPhase.Collecting && _draftPool.Count > 0;
+        ModEntry.Logger.Info(
+            $"[DIAG] HasRegisteredRewards: Phase={Phase}, poolCount={_draftPool.Count}, result={result}");
+        return result;
     }
 
     /// <summary>
     /// Called from CardReward.OnSelect Prefix — replaces the original card selection
     /// flow with our shared draft flow. Returns a Task&lt;bool&gt; that completes
     /// when the entire draft round is finished (true = remove reward from screen).
+    /// 
+    /// IMPORTANT: When a player opts out then re-enters, SubmitLocalOptOut has already
+    /// completed the old TCS and created a new one. The draft async loop is still running.
+    /// We detect this re-entry by checking Phase (still active) and the new TCS.
     /// </summary>
     public Task<bool> HandleCardRewardSelect(CardReward cardReward)
     {
-        if (_draftCompletionSource != null && !_draftCompletionSource.Task.IsCompleted)
+        // Check if draft flow is still running (Phase is active, not Inactive)
+        bool draftStillRunning = Phase != DraftPhase.Inactive && Phase != DraftPhase.Collecting;
+
+        ModEntry.Logger.Info(
+            $"[DIAG] HandleCardRewardSelect called: Phase={Phase}, " +
+            $"draftStillRunning={draftStillRunning}, " +
+            $"TCS_null={_draftCompletionSource == null}, " +
+            $"TCS_completed={_draftCompletionSource?.Task.IsCompleted ?? true}, " +
+            $"poolCount={_draftPool.Count}");
+
+        if (draftStillRunning && _draftCompletionSource != null)
         {
-            // Draft already in progress — return existing task
+            // Draft already in progress — handle re-entry from opt-out (skip)
+            // The player previously clicked "Skip" (opted out) and is now clicking
+            // CardReward again to re-enter. We need to:
+            //   1. Reset their IsOptedOut flag
+            //   2. Re-show the SharedDraft UI
+            //   3. Broadcast re-entry to other clients
+            ModEntry.Logger.Info("[DIAG] → Taking RE-ENTRY path (draft still running)");
+            HandleReEntryFromOptOut();
             return _draftCompletionSource.Task;
         }
 
+        ModEntry.Logger.Info("[DIAG] → Taking NEW DRAFT path (creating fresh TCS)");
         _draftCompletionSource = new TaskCompletionSource<bool>();
 
         // Fire-and-forget the async draft flow, which will complete the TCS
         _ = RunDraftFlowAsync(cardReward);
 
         return _draftCompletionSource.Task;
+    }
+
+    /// <summary>
+    /// Handle a player re-entering the draft after previously opting out (clicking "Skip").
+    /// Resets opt-out state, re-shows the UI, and broadcasts ready signal for re-entry.
+    /// Public so the floating re-entry button in SharedDraftScreen can call it directly.
+    /// </summary>
+    public void HandleReEntryFromOptOut()
+    {
+        int localSlot = GetLocalPlayerSlot();
+        var localState = _playerStates.FirstOrDefault(p => p.PlayerSlot == localSlot);
+
+        if (localState == null)
+        {
+            ModEntry.Logger.Info("HandleReEntryFromOptOut: local player state not found.");
+            return;
+        }
+
+        if (localState.IsCompleted)
+        {
+            ModEntry.Logger.Info(
+                "HandleReEntryFromOptOut: local player already completed, " +
+                "re-showing UI in read-only mode.");
+            // Player already got their card — just show the UI for spectating
+            SharedDraftScreen.Show();
+            if (Phase == DraftPhase.Resolving)
+                SharedDraftScreen.ShowWaitingForResolve();
+            else if (Phase == DraftPhase.Selecting)
+                SharedDraftScreen.ShowSelectingState();
+            return;
+        }
+
+        bool wasOptedOut = localState.IsOptedOut;
+
+        if (wasOptedOut)
+        {
+            // Reset opt-out status — MarkPlayerReady handles this via re-entry logic
+            ModEntry.Logger.Info(
+                $"Local player re-entering draft from opt-out " +
+                $"(Phase={Phase}, IsOptedOut={localState.IsOptedOut}).");
+
+            // MarkPlayerReady resets IsOptedOut and SelectedDraftId when re-entering
+            MarkPlayerReady(localSlot);
+
+            // Broadcast ready signal so remote clients know we're back
+            SharedDraftSynchronizer.Instance.BroadcastReady();
+        }
+
+        // Re-show the draft screen
+        SharedDraftScreen.Show();
+
+        // Set appropriate UI state based on current phase
+        if (Phase == DraftPhase.Resolving)
+        {
+            SharedDraftScreen.ShowWaitingForResolve();
+        }
+        else if (Phase == DraftPhase.Selecting)
+        {
+            SharedDraftScreen.ShowSelectingState();
+        }
+
+        // Refresh to show correct card states (greyed out awarded cards, etc.)
+        SharedDraftScreen.RefreshCards();
+
+        ModEntry.Logger.Info(
+            $"HandleReEntryFromOptOut: UI re-shown, " +
+            $"wasOptedOut={wasOptedOut}, Phase={Phase}.");
     }
 
     /// <summary>
@@ -833,7 +925,7 @@ public class SharedDraftManager
             // ═══════════════════════════════════════════════
             //  MAIN SETTLEMENT LOOP
             // ═══════════════════════════════════════════════
-            int maxRounds = 10; // Safety limit
+            int maxRounds = 50; // Safety limit (higher to accommodate opt-out re-entries)
             int round = 0;
 
             while (round < maxRounds)
@@ -861,25 +953,54 @@ public class SharedDraftManager
                 await ResolveAndAwardOneRound(triggeringReward, ct);
                 ct.ThrowIfCancellationRequested();
 
-                // d. Check: are there any active Selecting/ready players left?
-                bool hasActivePlayers = _playerStates.Any(
-                    ps => ps.IsReady && !ps.IsCompleted && !ps.IsOptedOut);
+                // d. Check: should the draft continue?
+                // The draft stays alive as long as ANY player hasn't gotten a card yet.
+                // This includes opted-out players who can re-enter at any time.
+                //
+                // Draft ends ONLY when ALL players are either:
+                //   - IsCompleted (got a card) 
+                //   - or there are no more available cards in the pool
+                bool allPlayersCompleted = _playerStates.All(ps => ps.IsCompleted);
+                bool noCardsLeft = GetAvailableCardsForSelection().Count == 0;
 
-                if (!hasActivePlayers)
+                if (allPlayersCompleted)
                 {
-                    ModEntry.Logger.Info("No active players remaining — draft complete.");
+                    ModEntry.Logger.Info("All players have completed (got cards) — draft complete.");
                     break;
                 }
 
-                // Also check if all remaining ready players are already completed
-                bool allReadyCompleted = _playerStates
-                    .Where(ps => ps.IsReady && !ps.IsOptedOut)
-                    .All(ps => ps.IsCompleted);
-
-                if (allReadyCompleted)
+                if (noCardsLeft)
                 {
-                    ModEntry.Logger.Info("All ready players have completed — draft complete.");
+                    ModEntry.Logger.Info("No more cards available in pool — draft complete.");
                     break;
+                }
+
+                // Check if there are active players currently selecting (not opted-out, not completed)
+                bool hasActiveSelectingPlayers = _playerStates.Any(
+                    ps => ps.IsReady && !ps.IsCompleted && !ps.IsOptedOut);
+
+                if (!hasActiveSelectingPlayers)
+                {
+                    // No one is actively selecting right now, but there are opted-out players
+                    // who haven't gotten a card. The draft should stay alive and wait for them
+                    // to re-enter via CardReward button.
+                    bool hasOptedOutWithoutCard = _playerStates.Any(
+                        ps => ps.IsOptedOut && !ps.IsCompleted);
+
+                    if (hasOptedOutWithoutCard)
+                    {
+                        ModEntry.Logger.Info(
+                            "No active selectors, but opted-out player(s) without cards remain. " +
+                            "Draft stays alive — waiting for re-entry or end-draft signal.");
+                        // Continue the loop — WaitForSettlement will wait for:
+                        //   1. An opted-out player to re-enter and select
+                        //   2. An end-draft signal from any player
+                    }
+                    else
+                    {
+                        ModEntry.Logger.Info("No active or opted-out players remaining — draft complete.");
+                        break;
+                    }
                 }
 
                 // e. Reset end-draft flag for the next round
@@ -903,9 +1024,27 @@ public class SharedDraftManager
             TransitionTo(DraftPhase.Complete);
             SharedDraftScreen.Hide();
 
-            _draftCompletionSource?.TrySetResult(true); // true = remove reward
+            // Determine whether CardReward should be removed from the rewards screen.
+            // true  = local player got a card → remove CardReward button (normal completion)
+            // false = local player did NOT get a card (opted out / skipped / never entered)
+            //         → keep CardReward button so they can still pick via the original flow
+            bool localPlayerGotCard = false;
+            {
+                int completionCheckSlot = GetLocalPlayerSlot();
+                var localPs = _playerStates.FirstOrDefault(p => p.PlayerSlot == completionCheckSlot);
+                localPlayerGotCard = localPs != null && localPs.IsCompleted && !localPs.IsOptedOut && localPs.IsAwarded;
+            }
 
-            ModEntry.Logger.Info("Shared draft flow completed successfully.");
+            ModEntry.Logger.Info(
+                $"[DIAG] RunDraftFlowAsync completing: localPlayerGotCard={localPlayerGotCard}, " +
+                $"TCS_null={_draftCompletionSource == null}, " +
+                $"TCS_completed={_draftCompletionSource?.Task.IsCompleted ?? true}");
+
+            _draftCompletionSource?.TrySetResult(localPlayerGotCard);
+
+            ModEntry.Logger.Info(
+                $"Shared draft flow completed successfully. " +
+                $"localPlayerGotCard={localPlayerGotCard} (CardReward {(localPlayerGotCard ? "removed" : "kept")}).");
         }
         catch (OperationCanceledException)
         {
@@ -942,6 +1081,19 @@ public class SharedDraftManager
     /// </summary>
     public void MarkPlayerReady(int playerSlot)
     {
+        var playerState = _playerStates.FirstOrDefault(p => p.PlayerSlot == playerSlot);
+
+        // Handle re-entry: if player previously opted out, reset their opt-out status
+        if (playerState != null && playerState.IsOptedOut && !playerState.IsCompleted)
+        {
+            playerState.IsOptedOut = false;
+            playerState.SelectedDraftId = -1;
+            ModEntry.Logger.Info(
+                $"Player {playerState.DisplayName} (slot {playerSlot}) re-entering draft after opt-out.");
+            // Allow re-registration as ready (remove from set so the check below passes)
+            _readyPlayers.Remove(playerSlot);
+        }
+
         if (_readyPlayers.Contains(playerSlot))
         {
             ModEntry.Logger.Info($"Player slot {playerSlot} already ready, ignoring duplicate.");
@@ -950,7 +1102,6 @@ public class SharedDraftManager
 
         _readyPlayers.Add(playerSlot);
 
-        var playerState = _playerStates.FirstOrDefault(p => p.PlayerSlot == playerSlot);
         if (playerState != null)
         {
             playerState.IsReady = true;
@@ -1100,6 +1251,13 @@ public class SharedDraftManager
     /// <summary>
     /// Submit the local player's opt-out decision.
     /// Called from SharedDraftSynchronizer when the opt-out action is confirmed.
+    /// 
+    /// CRITICAL: We must complete the current _draftCompletionSource with false
+    /// (meaning "don't remove CardReward button") so the original RewardsScreen
+    /// stops awaiting and the CardReward button becomes clickable again.
+    /// We then create a NEW _draftCompletionSource for potential re-entry.
+    /// Without this, the RewardsScreen is stuck awaiting the uncompleted Task,
+    /// and the player can never click CardReward again.
     /// </summary>
     public void SubmitLocalOptOut()
     {
@@ -1113,11 +1271,25 @@ public class SharedDraftManager
         }
 
         localState.IsOptedOut = true;
-        localState.IsCompleted = true;
+        // Note: Do NOT set IsCompleted here — player can re-enter via CardReward button
         ModEntry.Logger.Info(
-            $"Local player (slot {localSlot}) opted out of card selection → Completed.");
+            $"[DIAG] SubmitLocalOptOut: slot={localSlot}, Phase={Phase}, " +
+            $"oldTCS_null={_draftCompletionSource == null}, " +
+            $"oldTCS_completed={_draftCompletionSource?.Task.IsCompleted ?? true}");
 
-        // Refresh UI
+        // CRITICAL: Complete the current TCS with false so the RewardsScreen unblocks
+        // and the CardReward button stays visible and clickable.
+        // Then create a new TCS for re-entry.
+        var oldTcs = _draftCompletionSource;
+        _draftCompletionSource = new TaskCompletionSource<bool>();
+        bool setResult = oldTcs?.TrySetResult(false) ?? false; // false = keep CardReward button
+
+        ModEntry.Logger.Info(
+            $"[DIAG] SubmitLocalOptOut: oldTCS.TrySetResult(false) returned {setResult}, " +
+            $"new TCS created. Phase still={Phase}");
+
+        // Hide main UI — player can re-enter via the CardReward button
+        SharedDraftScreen.Hide();
         SharedDraftScreen.RefreshPlayerStatus();
     }
 
@@ -1135,9 +1307,9 @@ public class SharedDraftManager
         }
 
         playerState.IsOptedOut = true;
-        playerState.IsCompleted = true;
+        // Note: Do NOT set IsCompleted here — player can re-enter via CardReward button
         ModEntry.Logger.Info(
-            $"Player {playerState.DisplayName} (slot {playerSlot}) opted out of card selection → Completed.");
+            $"Player {playerState.DisplayName} (slot {playerSlot}) opted out of card selection (can re-enter later).");
 
         // Refresh UI
         SharedDraftScreen.RefreshPlayerStatus();
@@ -1168,12 +1340,19 @@ public class SharedDraftManager
     /// <summary>
     /// Check if all active players (non-completed, non-opted-out, entered) have made their selection.
     /// Only counts players in Selecting state — they must have selected.
+    /// Returns false if there are no active players (to prevent empty-set .All() returning true).
     /// </summary>
     public bool AllActivePlayersSelected()
     {
-        return _playerStates
+        var activePlayers = _playerStates
             .Where(ps => ps.IsReady && !ps.IsCompleted && !ps.IsOptedOut)
-            .All(ps => ps.HasSelected);
+            .ToList();
+
+        // If no active players, return false — nothing to settle
+        if (activePlayers.Count == 0)
+            return false;
+
+        return activePlayers.All(ps => ps.HasSelected);
     }
 
     /// <summary>
@@ -1336,13 +1515,12 @@ public class SharedDraftManager
             ct.ThrowIfCancellationRequested();
         }
 
-        // Handle opted-out players — mark them as completed
-        foreach (var ps in _playerStates.Where(p => p.IsOptedOut && !p.IsCompleted))
-        {
-            ps.IsCompleted = true;
-            ModEntry.Logger.Info(
-                $"Player {ps.DisplayName} (slot {ps.PlayerSlot}) opted out → marked Completed.");
-        }
+        // NOTE: Do NOT mark opted-out players as Completed here!
+        // Opted-out players can re-enter the draft at any time by clicking CardReward again.
+        // They should remain in IsOptedOut state (not IsCompleted) until they either:
+        //   1. Re-enter and pick a card (→ awarded → Completed)
+        //   2. The draft truly ends with all non-opted-out players done
+        // This keeps the draft alive as long as any player hasn't gotten their card.
 
         // Award cards to winners and no-conflict players
         // IMPORTANT: Hide SharedDraft overlay before awarding so CardPileCmd.Add animation works
@@ -1442,20 +1620,28 @@ public class SharedDraftManager
     /// <summary>
     /// Execute a rock/paper/scissors fight between competitors for a card.
     /// 
-    /// Reuses the game's RelicPickingResult.GenerateRelicFight() method.
-    /// The method requires:
-    ///   - List&lt;Player&gt; for the fighters
-    ///   - A RelicModel (we use a dummy/any available relic)
-    ///   - A Func&lt;RelicPickingFightMove&gt; to generate each player's move
-    ///
-    /// For deterministic multiplayer sync, we use RunState.Rng.TreasureRoomRelics
-    /// to generate moves. In debug mode, we use System.Random.
+    /// In real multiplayer: Uses the game's RelicPickingResult.GenerateRelicFight()
+    /// with RunState.Rng.TreasureRoomRelics for deterministic sync across clients.
+    /// 
+    /// In debug mode: Uses random fallback because virtual players all reference
+    /// the same local Player object, making GenerateRelicFight unfair (the winner
+    /// mapping via Player reference equality always picks the first competitor).
     /// </summary>
     private ConflictResult RunRockPaperScissors(
         List<PlayerDraftState> competitors,
         DraftCard contestedCard)
     {
-        // Build the player list for GenerateRelicFight
+        // In debug mode, always use random fallback.
+        // Virtual players share the same Player reference (or null), so
+        // GenerateRelicFight's winner mapping (c.Player == winnerPlayer)
+        // would always return the first competitor (local player), making
+        // the RPS result deterministic instead of random.
+        if (SharedDraftConfig.DebugMode)
+        {
+            return RunRpsFallback(competitors, contestedCard);
+        }
+
+        // Real multiplayer: build unique Player list for GenerateRelicFight
         List<Player> fighterPlayers = new();
         foreach (var comp in competitors)
         {
@@ -1463,23 +1649,15 @@ public class SharedDraftManager
             {
                 fighterPlayers.Add(comp.Player);
             }
-            else if (SharedDraftConfig.DebugMode)
-            {
-                // In debug mode with virtual players, use the local player
-                // as a stand-in (the fight logic only cares about identity).
-                var localPlayer = GetLocalPlayer();
-                if (localPlayer != null)
-                    fighterPlayers.Add(localPlayer);
-            }
         }
 
-        // If we can use the game's GenerateRelicFight (requires real Player objects)
+        // If we have enough unique real Player objects, use game API
         if (fighterPlayers.Count >= 2)
         {
             return RunRpsViaGameApi(fighterPlayers, competitors, contestedCard);
         }
 
-        // Fallback: simple random resolution (e.g., all virtual players in debug)
+        // Fallback: simple random resolution
         return RunRpsFallback(competitors, contestedCard);
     }
 
@@ -1757,6 +1935,19 @@ public class SharedDraftManager
     public void Reset()
     {
         var oldPhase = Phase;
+
+        // DIAGNOSTIC: log who called Reset with a stack trace
+        if (oldPhase != DraftPhase.Inactive)
+        {
+            var stackTrace = new System.Diagnostics.StackTrace(1, false);
+            ModEntry.Logger.Info(
+                $"[DIAG] Reset() called! Phase was {oldPhase}, " +
+                $"TCS_null={_draftCompletionSource == null}, " +
+                $"TCS_completed={_draftCompletionSource?.Task.IsCompleted ?? true}. " +
+                $"Caller: {stackTrace.GetFrame(0)?.GetMethod()?.Name ?? "unknown"} " +
+                $"→ {stackTrace.GetFrame(1)?.GetMethod()?.Name ?? "unknown"}");
+        }
+
         Phase = DraftPhase.Inactive;
 
         // Cancel any running async draft flow FIRST

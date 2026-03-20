@@ -945,8 +945,14 @@ public class SharedDraftSynchronizer
                     return true;
                 }
 
-                int relicIndex = (int)RelicIndexField.GetValue(__instance)!;
+                int? relicIndexNullable = (int?)RelicIndexField.GetValue(__instance);
                 Player player = (Player)PlayerField.GetValue(__instance)!;
+
+                // If index is null (skip/pass), let original handle it
+                if (!relicIndexNullable.HasValue)
+                    return true;
+
+                int relicIndex = relicIndexNullable.Value;
 
                 // Try to intercept as a draft selection
                 bool intercepted = Instance.TryInterceptPickRelicAction(
@@ -982,18 +988,23 @@ public class SharedDraftSynchronizer
     [HarmonyPatch(typeof(TreasureRoomRelicSynchronizer), nameof(TreasureRoomRelicSynchronizer.OnPicked))]
     internal static class TreasureRelicOnPickedPatch
     {
-        static bool Prefix(Player player, int index)
+        static bool Prefix(Player player, int? index)
         {
             try
             {
                 if (!Instance.IsActive)
                     return true;
 
+                if (!index.HasValue)
+                    return true; // null index (skip) — let original handle it
+
+                int idx = index.Value;
+
                 // If this is a ready signal or an encoded draft pick, skip the original
-                if (index == ReadySignalEncodedValue || IsEncodedDraftId(index))
+                if (idx == ReadySignalEncodedValue || IsEncodedDraftId(idx))
                 {
                     ModEntry.Logger.Info(
-                        $"Blocked encoded signal (index={index}) " +
+                        $"Blocked encoded signal (index={idx}) " +
                         $"from reaching TreasureRoomRelicSynchronizer.OnPicked");
                     return false;
                 }

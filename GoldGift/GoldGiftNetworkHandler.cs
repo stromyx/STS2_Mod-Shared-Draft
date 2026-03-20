@@ -700,7 +700,13 @@ public static class GoldGiftNetworkHandler
                 if (RelicIndexField == null || PlayerField == null)
                     return true;
 
-                int relicIndex = (int)RelicIndexField.GetValue(__instance)!;
+                int? relicIndexNullable = (int?)RelicIndexField.GetValue(__instance);
+
+                // If index is null (skip/pass), let original handle it
+                if (!relicIndexNullable.HasValue)
+                    return true;
+
+                int relicIndex = relicIndexNullable.Value;
 
                 // Only intercept our gold gift range
                 if (!IsEncodedGoldGift(relicIndex))
@@ -735,14 +741,17 @@ public static class GoldGiftNetworkHandler
         nameof(TreasureRoomRelicSynchronizer.OnPicked))]
     internal static class GoldGiftTreasureRelicOnPickedPatch
     {
-        static bool Prefix(Player player, int index)
+        static bool Prefix(Player player, int? index)
         {
             try
             {
-                if (IsEncodedGoldGift(index))
+                if (!index.HasValue)
+                    return true; // null index (skip) — let original handle it
+
+                if (IsEncodedGoldGift(index.Value))
                 {
                     ModEntry.Logger.Info(
-                        $"Blocked gold gift encoded index ({index}) " +
+                        $"Blocked gold gift encoded index ({index.Value}) " +
                         $"from TreasureRoomRelicSynchronizer.OnPicked");
                     return false;
                 }

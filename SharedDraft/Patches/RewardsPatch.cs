@@ -107,14 +107,28 @@ public static class RewardsPatch
         {
             try
             {
+                ModEntry.Logger.Info(
+                    $"[DIAG] CardReward.OnSelect Prefix entered. " +
+                    $"ShouldActivate={SharedDraftManager.ShouldActivate()}");
+
                 if (!SharedDraftManager.ShouldActivate())
                     return true; // Let original run
 
-                if (!SharedDraftManager.Instance.HasRegisteredRewards())
+                bool hasRewards = SharedDraftManager.Instance.HasRegisteredRewards();
+                ModEntry.Logger.Info(
+                    $"[DIAG] CardReward.OnSelect: HasRegisteredRewards={hasRewards}");
+
+                if (!hasRewards)
                     return true; // No shared draft data, let original run
 
                 // Replace original OnSelect with our shared draft flow
                 __result = SharedDraftManager.Instance.HandleCardRewardSelect(__instance);
+
+                ModEntry.Logger.Info(
+                    $"[DIAG] CardReward.OnSelect Prefix: intercepted! " +
+                    $"Task.IsCompleted={__result.IsCompleted}, " +
+                    $"Task.Result={(__result.IsCompleted ? __result.Result.ToString() : "pending")}");
+
                 return false; // Skip original
             }
             catch (System.Exception ex)

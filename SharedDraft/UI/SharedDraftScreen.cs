@@ -23,21 +23,24 @@ namespace SharedDraft.UI;
 /// container with owner info label and player selection avatar overlays.
 ///
 /// Layout:
-///   CanvasLayer (Layer=95)
-///   └── ColorRect (full-screen dim with subtle gradient)
-///       └── CenterContainer
-///           └── PanelContainer (main panel, 3D beveled style)
+///   CanvasLayer (Layer=1, very low so native UI overlays on top)
+///   └── ColorRect (dim background, top 80px uncovered for HUD bar, MouseFilter=Stop to block clicks in dim area)
+///       └── CenterContainer (MouseFilter=Ignore)
+///           └── PanelContainer (transparent, MouseFilter=Ignore)
 ///               └── VBoxContainer
-///                   ├── HBoxContainer (title bar with icon + title + player count)
-///                   ├── Panel (gradient separator)
+///                   ├── HBoxContainer (title bar)
 ///                   ├── HBoxContainer (main content)
 ///                   │   ├── ScrollContainer (card grid)
-///                   │   │   └── GridContainer (NCard cells + owner label)
-///                   │   └── PanelContainer (sidebar with 3D style)
-///                   │       └── VBoxContainer (player status cards)
-///                   ├── Panel (gradient separator)
-///                   ├── PanelContainer (selected card detail bar)
-///                   ├── HBoxContainer (action buttons with 3D style)
+///                   │   │   └── CenterContainer (centers the grid)
+///                   │   │       └── GridContainer (NCard cells, h_sep=32, v_sep=28)
+///                   │   └── VBoxContainer (sidebar, no background)
+///                   │       ├── ScrollContainer (player status)
+///                   │       │   └── VBoxContainer (_sidebarContainer)
+///                   │       └── VBoxContainer (buttonSection — fixed)
+///                   │           ├── Label (selected card info)
+///                   │           ├── Button (confirm)
+///                   │           ├── Button (skip)
+///                   │           └── Button (end draft)
 ///                   └── Label (status message)
 /// </summary>
 public static class SharedDraftScreen
@@ -65,6 +68,7 @@ public static class SharedDraftScreen
     // ── Input handler for Escape key (to open game pause menu) ──
     private static DraftInputHandler? _inputHandler;
     private static bool _isPauseMenuOpen = false;
+    private static bool _isHiddenForNativeScreen = false;  // True when auto-hidden for native screen (settings/map/deck)
 
     // ── Native NCard instances we created (track for cleanup) ──
     private static readonly List<NCard> _nativeCards = new();
@@ -80,18 +84,18 @@ public static class SharedDraftScreen
     //  NATIVE CARD SCALING
     // ═══════════════════════════════════════════════
 
-    // NCard.defaultSize = 300x422. Scale to ~65% for clearer card display.
-    private const float CardScale = 0.65f;
+    // NCard.defaultSize = 300x422. Scale to ~58% for clearer card display with cost icons visible.
+    private const float CardScale = 0.58f;
     private static readonly Vector2 NCardDefaultSize = new(300f, 422f);
     private static readonly Vector2 ScaledCardSize = new(
-        NCardDefaultSize.X * CardScale,   // ~195
-        NCardDefaultSize.Y * CardScale    // ~274
+        NCardDefaultSize.X * CardScale,   // ~174
+        NCardDefaultSize.Y * CardScale    // ~245
     );
 
-    // Cell size = scaled card + small bottom margin (no thick border)
+    // Cell size = scaled card + generous margin for breathing room
     private static readonly Vector2 CellSize = new(
-        ScaledCardSize.X + 10,  // ~205
-        ScaledCardSize.Y + 10   // ~284
+        ScaledCardSize.X + 24,  // ~198
+        ScaledCardSize.Y + 24   // ~269
     );
 
     // ═══════════════════════════════════════════════
@@ -188,6 +192,12 @@ public static class SharedDraftScreen
                         statusColor = new Color(1.0f, 0.85f, 0.3f); // Gold — awarded
                     }
                 }
+                else if (ps.IsOptedOut)
+                {
+                    // Opted out but not completed — can re-enter
+                    statusIcon = "⏸";
+                    statusColor = new Color(0.6f, 0.5f, 0.3f); // Dim yellow — paused
+                }
                 else if (ps.IsNotEntered)
                 {
                     statusIcon = "⏳";
@@ -212,6 +222,7 @@ public static class SharedDraftScreen
                 string suffix = isLocal ? " (你)" : "";
                 string completedSuffix = ps.IsCompleted && ps.IsOptedOut ? " [已跳过]"
                     : ps.IsCompleted ? " [已获卡]"
+                    : ps.IsOptedOut ? " [暂时跳过]"
                     : "";
                 label.Text = $"{statusIcon} {ps.DisplayName}{suffix}{completedSuffix}";
                 label.AddThemeColorOverride("font_color", statusColor);
@@ -307,50 +318,64 @@ public static class SharedDraftScreen
     {
         _canvasLayer = new CanvasLayer();
         _canvasLayer.Name = "SharedDraftOverlay";
-        _canvasLayer.Layer = 95;
+        _canvasLayer.Layer = 1;  // Very low layer so native UI (deck viewer, settings, map) can overlay on top
         _canvasLayer.Visible = false;
 
-        // Full-screen dim background
+        // Dim background — leave top ~80px uncovered for the native HUD bar
+        // (HP, gold, map, deck, settings buttons). MouseFilter=Stop so clicks within
+        // the dimmed area are consumed (preventing accidental clicks on game buttons
+        // that are hidden behind the dim overlay). The uncovered top 80px allows the
+        // native HUD buttons to remain clickable; DraftInputHandler._Process() watches
+        // for native screens (settings, map, deck viewer) opening and auto-hides the
+        // draft overlay so those screens display without interference.
         _dimBackground = new ColorRect();
         _dimBackground.Name = "DraftDimBackground";
         _dimBackground.Color = new Color(0.0f, 0.0f, 0.02f, 0.75f);
-        _dimBackground.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
-        _dimBackground.MouseFilter = Control.MouseFilterEnum.Stop;
+        _dimBackground.AnchorLeft = 0;
+        _dimBackground.AnchorTop = 0;
+        _dimBackground.AnchorRight = 1;
+        _dimBackground.AnchorBottom = 1;
+        _dimBackground.OffsetTop = 80;  // Leave top 80px uncovered for native HUD bar
+        _dimBackground.OffsetLeft = 0;
+        _dimBackground.OffsetRight = 0;
+        _dimBackground.OffsetBottom = 0;
+        _dimBackground.MouseFilter = Control.MouseFilterEnum.Stop;  // Block clicks in dim area from reaching hidden game buttons
         _canvasLayer.AddChild(_dimBackground);
 
-        // CenterContainer
+        // CenterContainer — MouseFilter=Ignore so clicks outside the panel pass through
+        // to native UI buttons (deck viewer, settings, etc.) beneath the overlay
         var centerContainer = new CenterContainer();
         centerContainer.Name = "DraftCenterContainer";
         centerContainer.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+        centerContainer.MouseFilter = Control.MouseFilterEnum.Ignore;
         _dimBackground.AddChild(centerContainer);
 
-        // ── Main panel with 3D beveled style — use most of screen space ──
+        // ── Main panel — transparent, no border (just dim background is enough) ──
         var panelContainer = new PanelContainer();
         panelContainer.Name = "SharedDraftPanel";
         // Use anchors for responsive sizing instead of fixed size
         panelContainer.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         panelContainer.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
-        panelContainer.CustomMinimumSize = new Vector2(1400, 850);
+        panelContainer.CustomMinimumSize = new Vector2(1300, 800);
 
-        var panelStyle = Create3DPanelStyle(
-            PanelBgTop,
-            new Color(0.35f, 0.25f, 0.6f, 0.7f),  // Purple border
-            new Color(0.5f, 0.4f, 0.8f, 0.4f),     // Top highlight
-            new Color(0.02f, 0.01f, 0.05f, 0.6f),   // Bottom shadow
-            borderWidth: 2, cornerRadius: 16);
+        // Transparent panel style — no visible border, just content padding
+        var panelStyle = new StyleBoxFlat();
+        panelStyle.BgColor = new Color(0, 0, 0, 0);  // Fully transparent
+        panelStyle.SetBorderWidthAll(0);
+        panelStyle.SetCornerRadiusAll(0);
+        panelStyle.SetContentMarginAll(12);
         panelContainer.AddThemeStyleboxOverride("panel", panelStyle);
+        panelContainer.MouseFilter = Control.MouseFilterEnum.Ignore;  // Let clicks pass through transparent areas
         centerContainer.AddChild(panelContainer);
 
         // Main vertical layout
         var mainVBox = new VBoxContainer();
         mainVBox.AddThemeConstantOverride("separation", 8);
+        mainVBox.MouseFilter = Control.MouseFilterEnum.Ignore;
         panelContainer.AddChild(mainVBox);
 
         // ── Title Bar ──
         BuildTitleBar(mainVBox);
-
-        // Gradient separator
-        mainVBox.AddChild(CreateGradientSeparator(AccentPurple));
 
         // ── Main content area (cards + sidebar) ──
         var contentHBox = new HBoxContainer();
@@ -358,28 +383,33 @@ public static class SharedDraftScreen
         contentHBox.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
         mainVBox.AddChild(contentHBox);
 
-        // Card grid area (scrollable)
+        // Card grid area (scrollable, centered)
         var cardScroll = new ScrollContainer();
         cardScroll.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         cardScroll.SizeFlagsStretchRatio = 4;
-        cardScroll.CustomMinimumSize = new Vector2(1000, 0);
+        cardScroll.CustomMinimumSize = new Vector2(900, 0);
         contentHBox.AddChild(cardScroll);
+
+        // Center the grid within the scroll area
+        var gridCenterContainer = new CenterContainer();
+        gridCenterContainer.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        gridCenterContainer.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
+        gridCenterContainer.MouseFilter = Control.MouseFilterEnum.Ignore;
+        cardScroll.AddChild(gridCenterContainer);
 
         _cardGrid = new GridContainer();
         _cardGrid.Name = "CardGrid";
         _cardGrid.Columns = 3;
-        _cardGrid.AddThemeConstantOverride("h_separation", 16);
-        _cardGrid.AddThemeConstantOverride("v_separation", 16);
-        _cardGrid.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
-        cardScroll.AddChild(_cardGrid);
+        _cardGrid.AddThemeConstantOverride("h_separation", 32);
+        _cardGrid.AddThemeConstantOverride("v_separation", 28);
+        _cardGrid.SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter;
+        _cardGrid.SizeFlagsVertical = Control.SizeFlags.ShrinkCenter;
+        gridCenterContainer.AddChild(_cardGrid);
 
-        // ── Sidebar (player status) with 3D panel ──
+        // ── Sidebar (player status + buttons) — transparent, no background ──
         BuildSidebar(contentHBox);
 
-        // Gradient separator
-        mainVBox.AddChild(CreateGradientSeparator(AccentGold));
-
-        // ── Bottom section ──
+        // ── Bottom section (status label only) ──
         BuildBottomSection(mainVBox);
 
         // ── Input handler for Escape key → pause menu ──
@@ -407,23 +437,19 @@ public static class SharedDraftScreen
 
     private static void BuildSidebar(HBoxContainer parent)
     {
-        var sidebarPanel = new PanelContainer();
-        sidebarPanel.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
-        sidebarPanel.SizeFlagsStretchRatio = 1;
-        sidebarPanel.CustomMinimumSize = new Vector2(220, 0);
+        // Outer VBox to split sidebar into scrollable player area + fixed button area
+        var sidebarOuterVBox = new VBoxContainer();
+        sidebarOuterVBox.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        sidebarOuterVBox.SizeFlagsStretchRatio = 1;
+        sidebarOuterVBox.CustomMinimumSize = new Vector2(220, 0);
+        sidebarOuterVBox.AddThemeConstantOverride("separation", 8);
+        parent.AddChild(sidebarOuterVBox);
 
-        var sidebarStyle = Create3DPanelStyle(
-            SidebarBg,
-            new Color(0.3f, 0.25f, 0.5f, 0.5f),
-            new Color(0.4f, 0.35f, 0.6f, 0.2f),
-            new Color(0.02f, 0.01f, 0.04f, 0.3f),
-            borderWidth: 1, cornerRadius: 10);
-        sidebarPanel.AddThemeStyleboxOverride("panel", sidebarStyle);
-        parent.AddChild(sidebarPanel);
-
+        // ── Top: Scrollable player status area ──
         var sidebarScroll = new ScrollContainer();
         sidebarScroll.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
-        sidebarPanel.AddChild(sidebarScroll);
+        sidebarScroll.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        sidebarOuterVBox.AddChild(sidebarScroll);
 
         _sidebarContainer = new VBoxContainer();
         _sidebarContainer.AddThemeConstantOverride("separation", 6);
@@ -439,34 +465,21 @@ public static class SharedDraftScreen
         _sidebarContainer.AddChild(sidebarTitle);
 
         _sidebarContainer.AddChild(CreateGradientSeparator(AccentPurple, 1));
-    }
 
-    private static void BuildBottomSection(VBoxContainer parent)
-    {
-        // Selected card info panel with subtle 3D effect
-        var selectedPanel = new PanelContainer();
-        var selectedStyle = Create3DPanelStyle(
-            new Color(0.08f, 0.07f, 0.13f, 0.8f),
-            new Color(0.3f, 0.25f, 0.5f, 0.3f),
-            new Color(0.3f, 0.25f, 0.5f, 0.1f),
-            new Color(0.01f, 0.01f, 0.03f, 0.2f),
-            borderWidth: 1, cornerRadius: 8);
-        selectedPanel.AddThemeStyleboxOverride("panel", selectedStyle);
-        parent.AddChild(selectedPanel);
+        // ── Bottom: Fixed action buttons (NOT inside _sidebarContainer, so PopulatePlayerStatus won't touch them) ──
+        var buttonSection = new VBoxContainer();
+        buttonSection.AddThemeConstantOverride("separation", 6);
+        buttonSection.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        sidebarOuterVBox.AddChild(buttonSection);
 
+        // Selected card info label
         _selectedInfoLabel = new Label();
         _selectedInfoLabel.Text = "未选择卡牌";
-        _selectedInfoLabel.AddThemeFontSizeOverride("font_size", 14);
+        _selectedInfoLabel.AddThemeFontSizeOverride("font_size", 13);
         _selectedInfoLabel.AddThemeColorOverride("font_color", TextDim);
         _selectedInfoLabel.HorizontalAlignment = HorizontalAlignment.Center;
         _selectedInfoLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
-        selectedPanel.AddChild(_selectedInfoLabel);
-
-        // Action buttons
-        var actionHBox = new HBoxContainer();
-        actionHBox.AddThemeConstantOverride("separation", 16);
-        actionHBox.Alignment = BoxContainer.AlignmentMode.Center;
-        parent.AddChild(actionHBox);
+        buttonSection.AddChild(_selectedInfoLabel);
 
         _confirmButton = Create3DButton(
             "✓  确认选择",
@@ -474,10 +487,11 @@ public static class SharedDraftScreen
             new Color(0.2f, 0.65f, 0.28f, 1.0f),
             new Color(0.08f, 0.25f, 0.1f, 0.5f),
             new Color(0.25f, 0.7f, 0.35f, 0.6f));
-        _confirmButton.CustomMinimumSize = new Vector2(220, 46);
+        _confirmButton.CustomMinimumSize = new Vector2(0, 40);
+        _confirmButton.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         _confirmButton.Disabled = true;
         _confirmButton.Pressed += OnConfirmPressed;
-        actionHBox.AddChild(_confirmButton);
+        buttonSection.AddChild(_confirmButton);
 
         _skipButton = Create3DButton(
             "跳过",
@@ -485,9 +499,10 @@ public static class SharedDraftScreen
             new Color(0.6f, 0.4f, 0.2f, 0.95f),
             new Color(0.2f, 0.15f, 0.08f, 0.5f),
             new Color(0.7f, 0.5f, 0.25f, 0.5f));
-        _skipButton.CustomMinimumSize = new Vector2(150, 46);
+        _skipButton.CustomMinimumSize = new Vector2(0, 40);
+        _skipButton.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         _skipButton.Pressed += OnSkipPressed;
-        actionHBox.AddChild(_skipButton);
+        buttonSection.AddChild(_skipButton);
 
         _endDraftButton = Create3DButton(
             "⚡ 结束选牌",
@@ -495,12 +510,16 @@ public static class SharedDraftScreen
             new Color(0.7f, 0.2f, 0.2f, 0.95f),
             new Color(0.25f, 0.08f, 0.08f, 0.5f),
             new Color(0.8f, 0.3f, 0.3f, 0.5f));
-        _endDraftButton.CustomMinimumSize = new Vector2(180, 46);
+        _endDraftButton.CustomMinimumSize = new Vector2(0, 40);
+        _endDraftButton.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         _endDraftButton.Pressed += OnEndDraftPressed;
         _endDraftButton.TooltipText = "立即开始结算（只结算已选择的玩家）";
-        actionHBox.AddChild(_endDraftButton);
+        buttonSection.AddChild(_endDraftButton);
+    }
 
-        // Status label
+    private static void BuildBottomSection(VBoxContainer parent)
+    {
+        // Status label (centered at bottom)
         _statusLabel = new Label();
         _statusLabel.Text = "";
         _statusLabel.AddThemeFontSizeOverride("font_size", 13);
@@ -619,9 +638,9 @@ public static class SharedDraftScreen
         normalStyle.BorderWidthRight = 0;
         normalStyle.BorderWidthBottom = 0;
         normalStyle.SetCornerRadiusAll(6);
-        normalStyle.ContentMarginLeft = 4;
-        normalStyle.ContentMarginTop = 2;
-        normalStyle.ContentMarginRight = 2;
+        normalStyle.ContentMarginLeft = 12;
+        normalStyle.ContentMarginTop = 10;
+        normalStyle.ContentMarginRight = 4;
         normalStyle.ContentMarginBottom = 2;
         cell.AddThemeStyleboxOverride("panel", normalStyle);
 
@@ -673,9 +692,9 @@ public static class SharedDraftScreen
                 hoverStyle.BorderWidthRight = 1;
                 hoverStyle.BorderWidthBottom = 1;
                 hoverStyle.SetCornerRadiusAll(6);
-                hoverStyle.ContentMarginLeft = 4;
-                hoverStyle.ContentMarginTop = 2;
-                hoverStyle.ContentMarginRight = 2;
+                hoverStyle.ContentMarginLeft = 12;
+                hoverStyle.ContentMarginTop = 10;
+                hoverStyle.ContentMarginRight = 4;
                 hoverStyle.ContentMarginBottom = 2;
                 hoverStyle.ShadowColor = new Color(poolBorderColor.R * 0.3f, poolBorderColor.G * 0.3f, poolBorderColor.B * 0.3f, 0.4f);
                 hoverStyle.ShadowSize = 4;
@@ -954,9 +973,9 @@ public static class SharedDraftScreen
             selectedStyle.BorderColor = SelectedBorderColor;
             selectedStyle.SetBorderWidthAll(2);
             selectedStyle.SetCornerRadiusAll(6);
-            selectedStyle.ContentMarginLeft = 4;
-            selectedStyle.ContentMarginTop = 2;
-            selectedStyle.ContentMarginRight = 2;
+            selectedStyle.ContentMarginLeft = 12;
+            selectedStyle.ContentMarginTop = 10;
+            selectedStyle.ContentMarginRight = 4;
             selectedStyle.ContentMarginBottom = 2;
             selectedStyle.ShadowColor = new Color(1.0f, 0.85f, 0.2f, 0.3f);
             selectedStyle.ShadowSize = 6;
@@ -982,6 +1001,7 @@ public static class SharedDraftScreen
     /// <summary>
     /// Update selection overlays on all cards — show small player avatar badges
     /// on cards that players have selected (like relic picking in treasure rooms).
+    /// When multiple players pick the same card, a conflict indicator with bounce animation is shown.
     /// </summary>
     private static void UpdateCardSelectionOverlays()
     {
@@ -1017,7 +1037,18 @@ public static class SharedDraftScreen
                 !GodotObject.IsInstanceValid(cell))
                 continue;
 
+            bool isConflict = players.Count > 1;
             var overlays = new List<(int slot, Control overlay)>();
+
+            // Use a dedicated overlay container so avatars are not affected by
+            // PanelContainer's child layout (which stretches children to fill).
+            // The overlay container sits on top of the cell content with absolute positioning.
+            var overlayContainer = new Control();
+            overlayContainer.Name = "SelectionOverlay";
+            overlayContainer.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+            overlayContainer.MouseFilter = Control.MouseFilterEnum.Ignore;
+            cell.AddChild(overlayContainer);
+            overlays.Add((-99, overlayContainer)); // Track for cleanup
 
             for (int i = 0; i < players.Count; i++)
             {
@@ -1027,13 +1058,43 @@ public static class SharedDraftScreen
                 // Create a character icon avatar badge
                 var avatarBadge = CreatePlayerAvatarBadge(ps.PlayerSlot, ps.DisplayName, isLocal);
 
-                // Position at bottom-right, stacking horizontally
+                // Position at bottom-right of the cell, stacking horizontally.
+                // Use CellSize constants instead of cell.Size which may not be computed yet.
                 avatarBadge.Position = new Vector2(
-                    cell.Size.X - 38 - (i * 34),
-                    cell.Size.Y - 38);
+                    CellSize.X - 42 - (i * 34),
+                    CellSize.Y - 42);
 
-                cell.AddChild(avatarBadge);
+                overlayContainer.AddChild(avatarBadge);
                 overlays.Add((ps.PlayerSlot, avatarBadge));
+            }
+
+            // If multiple players selected the same card, add conflict indicator + bounce animation
+            if (isConflict)
+            {
+                // Add ⚔️ conflict indicator at top-right
+                var conflictIcon = new Label();
+                conflictIcon.MouseFilter = Control.MouseFilterEnum.Ignore;
+                conflictIcon.Text = "⚔️";
+                conflictIcon.AddThemeFontSizeOverride("font_size", 18);
+                conflictIcon.Position = new Vector2(CellSize.X - 30, 4);
+                conflictIcon.TooltipText = $"冲突！{players.Count} 名玩家选择了同一张卡";
+                overlayContainer.AddChild(conflictIcon);
+                overlays.Add((-1, conflictIcon)); // -1 = conflict indicator (not a player)
+
+                // Bounce animation on all avatar badges (like NMultiplayerVoteContainer.BouncePlayers)
+                Callable.From(() =>
+                {
+                    foreach (var (slot, overlay) in overlays)
+                    {
+                        if (slot < 0 || !GodotObject.IsInstanceValid(overlay) || !overlay.IsInsideTree())
+                            continue;
+                        var bounceTween = overlay.CreateTween();
+                        bounceTween.TweenProperty(overlay, "scale", new Vector2(1.3f, 1.3f), 0.15f)
+                            .SetTrans(Tween.TransitionType.Back).SetEase(Tween.EaseType.Out);
+                        bounceTween.TweenProperty(overlay, "scale", new Vector2(1.0f, 1.0f), 0.15f)
+                            .SetTrans(Tween.TransitionType.Bounce).SetEase(Tween.EaseType.Out);
+                    }
+                }).CallDeferred();
             }
 
             _cardSelectionOverlays[draftId] = overlays;
@@ -1041,9 +1102,10 @@ public static class SharedDraftScreen
     }
 
     /// <summary>
-    /// Create a small player avatar badge using the game's native character icon texture.
-    /// Falls back to colored circle + initial if character icon is unavailable.
-    /// Like the relic picking overlay in treasure rooms (NMultiplayerVoteContainer).
+    /// Create a small player avatar badge using the game's native multiplayer_vote_icon scene.
+    /// This is the same approach used by NMultiplayerVoteContainer in treasure room relic picking.
+    /// Falls back to manual character icon if scene instantiation fails,
+    /// and to colored circle + initial if character icon is unavailable.
     /// </summary>
     private static Control CreatePlayerAvatarBadge(int playerSlot, string displayName, bool isLocal)
     {
@@ -1051,7 +1113,7 @@ public static class SharedDraftScreen
             ? PoolColors[playerSlot]
             : new Color(0.5f, 0.5f, 0.5f);
 
-        // Try to get the player's character icon texture (like the vote container does)
+        // Try to get the player's character icon texture
         Texture2D? iconTexture = null;
         Texture2D? outlineTexture = null;
         try
@@ -1069,12 +1131,66 @@ public static class SharedDraftScreen
             ModEntry.Logger.Info($"[Avatar] Could not get character icon for slot {playerSlot}: {ex.Message}");
         }
 
+        // ── Strategy 1: Try native multiplayer_vote_icon scene (authentic game look) ──
+        try
+        {
+            var voteIcon = MegaCrit.Sts2.Core.Helpers.SceneHelper.Instantiate<TextureRect>("ui/multiplayer_vote_icon");
+            if (voteIcon != null && iconTexture != null)
+            {
+                voteIcon.MouseFilter = Control.MouseFilterEnum.Ignore;
+                voteIcon.Texture = iconTexture;
+                voteIcon.CustomMinimumSize = new Vector2(32, 32);
+                voteIcon.Size = new Vector2(32, 32);
+
+                // Set outline texture (child node "Outline")
+                try
+                {
+                    var outlineNode = voteIcon.GetNode<TextureRect>("Outline");
+                    if (outlineNode != null && outlineTexture != null)
+                    {
+                        outlineNode.Texture = outlineTexture;
+                        outlineNode.Modulate = isLocal ? AccentGold : Colors.White;
+                    }
+                }
+                catch { /* Outline node may not exist */ }
+
+                // Tooltip
+                voteIcon.TooltipText = isLocal ? $"{displayName} (你)" : displayName;
+
+                // Animate entry: fade in + slide up (like NMultiplayerVoteContainer.AnimVoteIn)
+                // NOTE: Cannot call CreateTween() here — the node hasn't been added to the
+                // scene tree yet (AddChild happens in UpdateCardSelectionOverlays after return).
+                // Use CallDeferred to ensure the node is inside the tree before tweening.
+                voteIcon.Modulate = new Color(1, 1, 1, 0);
+                voteIcon.Position += new Vector2(0, 15);
+                Callable.From(() =>
+                {
+                    if (GodotObject.IsInstanceValid(voteIcon) && voteIcon.IsInsideTree())
+                    {
+                        var tween = voteIcon.CreateTween();
+                        tween.SetParallel(true);
+                        tween.TweenProperty(voteIcon, "modulate:a", 1.0f, 0.2f);
+                        tween.TweenProperty(voteIcon, "position:y", voteIcon.Position.Y - 15, 0.3f)
+                            .SetTrans(Tween.TransitionType.Back).SetEase(Tween.EaseType.Out);
+                    }
+                }).CallDeferred();
+
+                ModEntry.Logger.Info($"[Avatar] Created native vote icon for slot {playerSlot}");
+                return voteIcon;
+            }
+        }
+        catch (System.Exception ex)
+        {
+            ModEntry.Logger.Info($"[Avatar] Native vote icon failed for slot {playerSlot}: {ex.Message}");
+        }
+
+        // ── Strategy 2: Manual character icon with Tween animation ──
         if (iconTexture != null)
         {
-            // ── Use native character icon (like NMultiplayerVoteContainer) ──
             var container = new Control();
             container.MouseFilter = Control.MouseFilterEnum.Ignore;
             container.CustomMinimumSize = new Vector2(32, 32);
+            container.Size = new Vector2(32, 32);
 
             var iconRect = new TextureRect();
             iconRect.MouseFilter = Control.MouseFilterEnum.Ignore;
@@ -1093,7 +1209,6 @@ public static class SharedDraftScreen
                 outlineRect.CustomMinimumSize = new Vector2(32, 32);
                 outlineRect.StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered;
                 outlineRect.ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize;
-                // Tint outline with player color if local, white otherwise
                 outlineRect.Modulate = isLocal ? AccentGold : Colors.White;
                 container.AddChild(outlineRect);
             }
@@ -1113,27 +1228,41 @@ public static class SharedDraftScreen
                 glowStyle.SetContentMarginAll(0);
                 glowPanel.AddThemeStyleboxOverride("panel", glowStyle);
                 container.AddChild(glowPanel);
-                // Move glow behind icon
                 container.MoveChild(glowPanel, 0);
             }
 
-            // Tooltip with full name
             iconRect.TooltipText = isLocal ? $"{displayName} (你)" : displayName;
+
+            // Animate entry: fade in + slide up
+            container.Modulate = new Color(1, 1, 1, 0);
+            container.Position += new Vector2(0, 15);
+            Callable.From(() =>
+            {
+                if (GodotObject.IsInstanceValid(container) && container.IsInsideTree())
+                {
+                    var tween = container.CreateTween();
+                    tween.SetParallel(true);
+                    tween.TweenProperty(container, "modulate:a", 1.0f, 0.2f);
+                    tween.TweenProperty(container, "position:y", container.Position.Y - 15, 0.3f)
+                        .SetTrans(Tween.TransitionType.Back).SetEase(Tween.EaseType.Out);
+                }
+            }).CallDeferred();
 
             return container;
         }
-        else
+
+        // ── Strategy 3: Fallback colored circle with initial ──
         {
-            // ── Fallback: colored circle with initial ──
             var container = new PanelContainer();
             container.MouseFilter = Control.MouseFilterEnum.Ignore;
             container.CustomMinimumSize = new Vector2(28, 28);
+            container.Size = new Vector2(28, 28);
 
             var badgeStyle = new StyleBoxFlat();
             badgeStyle.BgColor = playerColor;
             badgeStyle.BorderColor = isLocal ? AccentGold : new Color(1, 1, 1, 0.8f);
             badgeStyle.SetBorderWidthAll(isLocal ? 2 : 1);
-            badgeStyle.SetCornerRadiusAll(14); // Circular
+            badgeStyle.SetCornerRadiusAll(14);
             badgeStyle.SetContentMarginAll(0);
             badgeStyle.ShadowColor = new Color(0, 0, 0, 0.6f);
             badgeStyle.ShadowSize = 2;
@@ -1297,10 +1426,37 @@ public static class SharedDraftScreen
         foreach (var (id, cell) in _cardCells)
         {
             if (GodotObject.IsInstanceValid(cell) && id != draftId)
+            {
                 SetCellSelected(cell, false);
+                // Subtle shrink-back animation for deselected cells
+                Callable.From(() =>
+                {
+                    if (GodotObject.IsInstanceValid(cell) && cell.IsInsideTree())
+                    {
+                        var shrinkTween = cell.CreateTween();
+                        shrinkTween.TweenProperty(cell, "scale", Vector2.One, 0.15f)
+                            .SetTrans(Tween.TransitionType.Sine).SetEase(Tween.EaseType.Out);
+                    }
+                }).CallDeferred();
+            }
         }
 
         SetCellSelected(clickedCell, true);
+
+        // Bounce animation on clicked card (NMultiplayerVoteContainer-inspired)
+        Callable.From(() =>
+        {
+            if (GodotObject.IsInstanceValid(clickedCell) && clickedCell.IsInsideTree())
+            {
+                var bounceTween = clickedCell.CreateTween();
+                // Quick scale up → settle back — gives satisfying tactile feedback
+                bounceTween.TweenProperty(clickedCell, "scale", new Vector2(1.05f, 1.05f), 0.1f)
+                    .SetTrans(Tween.TransitionType.Back).SetEase(Tween.EaseType.Out);
+                bounceTween.TweenProperty(clickedCell, "scale", Vector2.One, 0.15f)
+                    .SetTrans(Tween.TransitionType.Bounce).SetEase(Tween.EaseType.Out);
+            }
+        }).CallDeferred();
+
         UpdateSelectedInfo();
         UpdateConfirmButton();
     }
@@ -1332,22 +1488,9 @@ public static class SharedDraftScreen
 
     private static void OnSkipPressed()
     {
-        SetStatus("已跳过选卡 — 本轮不获取任何卡牌。", new Color(0.6f, 0.6f, 0.6f));
-
-        if (_confirmButton != null)
-            _confirmButton.Disabled = true;
-        if (_skipButton != null)
-            _skipButton.Disabled = true;
-        if (_endDraftButton != null)
-            _endDraftButton.Disabled = true;
-        foreach (var (_, cell) in _cardCells)
-        {
-            if (GodotObject.IsInstanceValid(cell))
-                SetCellInteractable(cell, false);
-        }
-
+        ModEntry.Logger.Info("Skip pressed → player opted out (can re-enter via CardReward).");
         SharedDraftManager.Instance.OnLocalPlayerOptOut();
-        ModEntry.Logger.Info("Skip pressed → player opted out (no card selected).");
+        // Note: OnLocalPlayerOptOut → SubmitLocalOptOut → Hide() is called from Manager
     }
 
     private static void OnEndDraftPressed()
@@ -1513,9 +1656,9 @@ public static class SharedDraftScreen
             contestedStyle.BorderColor = StatusConflict;
             contestedStyle.SetBorderWidthAll(2);
             contestedStyle.SetCornerRadiusAll(6);
-            contestedStyle.ContentMarginLeft = 4;
-            contestedStyle.ContentMarginTop = 2;
-            contestedStyle.ContentMarginRight = 2;
+            contestedStyle.ContentMarginLeft = 12;
+            contestedStyle.ContentMarginTop = 10;
+            contestedStyle.ContentMarginRight = 4;
             contestedStyle.ContentMarginBottom = 2;
             contestedStyle.ShadowColor = new Color(1.0f, 0.3f, 0.1f, 0.3f);
             contestedStyle.ShadowSize = 4;
@@ -1669,6 +1812,7 @@ public static class SharedDraftScreen
         _countdownLabel = null;
         _inputHandler = null;
         _isPauseMenuOpen = false;
+        _isHiddenForNativeScreen = false;
         _selectedDraftId = -1;
         _isInWaitingState = false;
         _cardCells.Clear();
@@ -1840,20 +1984,82 @@ public static class SharedDraftScreen
             RestoreFromPauseMenu();
         }
     }
+
+    // ═══════════════════════════════════════════════
+    //  NATIVE SCREEN WATCHER (settings, map, deck viewer)
+    // ═══════════════════════════════════════════════
+
+    /// <summary>
+    /// Called by DraftInputHandler._Process() when a native game screen (settings, map,
+    /// deck viewer, etc.) is detected as visible. Hides the draft overlay so the native
+    /// screen can be seen and interacted with without interference.
+    /// </summary>
+    public static void HideForNativeScreen()
+    {
+        if (_isHiddenForNativeScreen || _isPauseMenuOpen) return;
+
+        _isHiddenForNativeScreen = true;
+
+        if (_canvasLayer != null && GodotObject.IsInstanceValid(_canvasLayer))
+            _canvasLayer.Visible = false;
+
+        ModEntry.Logger.Info("[SharedDraft] Auto-hidden: native game screen detected.");
+    }
+
+    /// <summary>
+    /// Called by DraftInputHandler._Process() when all native screens have closed.
+    /// Restores the draft overlay visibility.
+    /// </summary>
+    public static void RestoreFromNativeScreen()
+    {
+        if (!_isHiddenForNativeScreen) return;
+
+        _isHiddenForNativeScreen = false;
+
+        // Only restore if not also hidden for pause menu or card inspector
+        if (!_isPauseMenuOpen && _canvasLayer != null && GodotObject.IsInstanceValid(_canvasLayer))
+            _canvasLayer.Visible = true;
+
+        ModEntry.Logger.Info("[SharedDraft] Restored: native game screen closed.");
+    }
+
+    /// <summary>Whether the draft overlay is currently auto-hidden for a native screen.</summary>
+    public static bool IsHiddenForNativeScreen => _isHiddenForNativeScreen;
 }
 
 /// <summary>
-/// Lightweight Node that handles _UnhandledInput for the SharedDraft overlay.
-/// Listens for Escape key press to trigger the game's native pause/settings menu.
-/// This is a separate class (not static) because it needs to inherit from Node
-/// to receive Godot input callbacks.
+/// Lightweight Node that handles _UnhandledInput for the SharedDraft overlay
+/// AND polls for native game screens in _Process.
 ///
-/// Key flow: When Escape is pressed while SharedDraft overlay is visible,
-/// we consume the event (preventing it from reaching the game), hide the overlay,
-/// then re-send Escape so the game's pause menu opens without interference.
+/// _UnhandledInput: Listens for Escape key press to trigger the game's native pause/settings menu.
+/// _Process: Every 0.25s, checks the game's NRunSubmenuStack.IsScreenOpen property to detect
+/// when a native screen (settings, map, deck viewer, etc.) is open. When detected, auto-hides
+/// the SharedDraft overlay. When all native screens close, restores the overlay.
+///
+/// APPROACH HISTORY:
+/// - v8: Scanned scene tree for NScreen-derived nodes by name/class matching → UNRELIABLE,
+///   because node names and class names don't always match our patterns.
+/// - v9 (current): Uses the game's native API: NRunSubmenuStack.IsScreenOpen property
+///   (from NRun.SubmenuStack). This is the same mechanism the game itself uses to track
+///   whether settings/deck/map/pause screens are open. Much more reliable than heuristic
+///   scene tree scanning.
+///
+/// API chain: RunManager.Instance → .Run (NRun node) → .SubmenuStack (NRunSubmenuStack)
+///   → .IsScreenOpen (bool) / .ScreenCount (int)
 /// </summary>
 internal partial class DraftInputHandler : Node
 {
+    // Throttle _Process scanning to avoid checking every frame
+    private double _scanTimer = 0;
+    private const double ScanInterval = 0.25; // Check 4 times per second
+
+    // Cache reflection-based screen detection
+    private object? _cachedSubmenuStack;
+    private System.Reflection.PropertyInfo? _isScreenOpenProp;
+    private System.Reflection.PropertyInfo? _screenCountProp;
+    private bool _reflectionInitialized = false;
+    private bool _reflectionFailed = false;
+
     public override void _UnhandledInput(InputEvent @event)
     {
         // Only handle input when the SharedDraft overlay is visible
@@ -1870,5 +2076,324 @@ internal partial class DraftInputHandler : Node
                 SharedDraftScreen.OpenPauseMenu();
             }
         }
+    }
+
+    public override void _Process(double delta)
+    {
+        // Only scan when the draft is supposed to be visible (not permanently hidden by manager)
+        // We need to check even when auto-hidden, to detect when the native screen closes.
+        _scanTimer += delta;
+        if (_scanTimer < ScanInterval) return;
+        _scanTimer = 0;
+
+        bool nativeScreenOpen = IsAnyNativeScreenOpen();
+
+        if (nativeScreenOpen && !SharedDraftScreen.IsHiddenForNativeScreen)
+        {
+            SharedDraftScreen.HideForNativeScreen();
+        }
+        else if (!nativeScreenOpen && SharedDraftScreen.IsHiddenForNativeScreen)
+        {
+            SharedDraftScreen.RestoreFromNativeScreen();
+        }
+    }
+
+    /// <summary>
+    /// Check if any game native screen (settings, map, deck viewer, pause, etc.) is open.
+    ///
+    /// Uses reflection to access the game's native IsScreenOpen property, which is the
+    /// authoritative source for whether any in-run submenu screen is currently displayed.
+    /// Falls back to SceneTree.Paused check (for pause menu) and a lightweight scene tree
+    /// scan if the API is unavailable.
+    /// </summary>
+    private bool IsAnyNativeScreenOpen()
+    {
+        try
+        {
+            // === Strategy 1: Use IsScreenOpen via reflection (authoritative game API) ===
+            if (CheckIsScreenOpenViaReflection())
+                return true;
+
+            // === Strategy 2: Check SceneTree.Paused (for pause menu, which may bypass SubmenuStack) ===
+            var tree = GetTree();
+            if (tree != null && tree.Paused)
+                return true;
+
+            // === Strategy 3: Lightweight fallback — check for NSettingsScreenPopup ===
+            // The settings screen sometimes appears as a popup outside the submenu stack.
+            if (HasSettingsPopupVisible())
+                return true;
+
+            return false;
+        }
+        catch (System.Exception ex)
+        {
+            ModEntry.Logger.Info($"[DraftInputHandler] IsAnyNativeScreenOpen error: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Use reflection to check the game's screen state via NRunSubmenuStack or RunManager.
+    ///
+    /// The game has several relevant properties (discovered via DLL analysis):
+    /// - NRunSubmenuStack.IsScreenOpen (bool) — authoritative screen open state
+    /// - NRunSubmenuStack.ScreenCount (int) — number of open screens
+    /// - RunManager.Run (NRun) → .SubmenuStack (NRunSubmenuStack)
+    ///
+    /// We use reflection because the publicized DLL may not expose all properties to the compiler,
+    /// but they exist in the runtime type system and can be accessed via reflection.
+    /// </summary>
+    private bool CheckIsScreenOpenViaReflection()
+    {
+        if (_reflectionFailed) return false;
+
+        try
+        {
+            if (!_reflectionInitialized)
+            {
+                InitializeReflection();
+                _reflectionInitialized = true;
+            }
+
+            if (_cachedSubmenuStack == null || (_cachedSubmenuStack is GodotObject go && !GodotObject.IsInstanceValid(go)))
+            {
+                // Try to re-obtain the submenu stack
+                _cachedSubmenuStack = ObtainSubmenuStackViaReflection();
+                if (_cachedSubmenuStack == null)
+                    return false;
+            }
+
+            // Check IsScreenOpen property
+            if (_isScreenOpenProp != null)
+            {
+                var val = _isScreenOpenProp.GetValue(_cachedSubmenuStack);
+                if (val is bool isOpen && isOpen)
+                    return true;
+            }
+
+            // Check ScreenCount property (belt-and-suspenders)
+            if (_screenCountProp != null)
+            {
+                var val = _screenCountProp.GetValue(_cachedSubmenuStack);
+                if (val is int count && count > 0)
+                    return true;
+            }
+
+            return false;
+        }
+        catch (System.Exception ex)
+        {
+            ModEntry.Logger.Info($"[DraftInputHandler] Reflection check error: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Initialize reflection — find the IsScreenOpen and ScreenCount properties on NRunSubmenuStack.
+    /// </summary>
+    private void InitializeReflection()
+    {
+        try
+        {
+            // Find NRunSubmenuStack type
+            var submenuStackType = System.Type.GetType(
+                "MegaCrit.Sts2.Core.Nodes.Screens.NRunSubmenuStack, sts2");
+
+            if (submenuStackType == null)
+            {
+                // Try to find it in loaded assemblies
+                foreach (var asm in System.AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    submenuStackType = asm.GetType("MegaCrit.Sts2.Core.Nodes.Screens.NRunSubmenuStack");
+                    if (submenuStackType != null) break;
+                }
+            }
+
+            if (submenuStackType != null)
+            {
+                var flags = System.Reflection.BindingFlags.Instance |
+                            System.Reflection.BindingFlags.Public |
+                            System.Reflection.BindingFlags.NonPublic;
+
+                _isScreenOpenProp = submenuStackType.GetProperty("IsScreenOpen", flags);
+                _screenCountProp = submenuStackType.GetProperty("ScreenCount", flags);
+
+                // If ScreenCount is not a property, it might be a method
+                if (_screenCountProp == null)
+                {
+                    var screenCountMethod = submenuStackType.GetMethod("GetScreenCount", flags);
+                    if (screenCountMethod != null)
+                    {
+                        // Wrap the method as a pseudo-property for uniform access
+                        ModEntry.Logger.Info("[DraftInputHandler] Found GetScreenCount() method instead of property.");
+                    }
+                }
+
+                ModEntry.Logger.Info(
+                    $"[DraftInputHandler] Reflection init: SubmenuStackType={submenuStackType.Name}, " +
+                    $"IsScreenOpen={_isScreenOpenProp != null}, ScreenCount={_screenCountProp != null}");
+            }
+            else
+            {
+                ModEntry.Logger.Info("[DraftInputHandler] Could not find NRunSubmenuStack type via reflection.");
+
+                // Fallback: try to find IsScreenOpen on RunManager itself
+                var runManagerType = typeof(MegaCrit.Sts2.Core.Runs.RunManager);
+                var flags2 = System.Reflection.BindingFlags.Instance |
+                             System.Reflection.BindingFlags.Public |
+                             System.Reflection.BindingFlags.NonPublic;
+                _isScreenOpenProp = runManagerType.GetProperty("IsScreenOpen", flags2);
+                _screenCountProp = runManagerType.GetProperty("ScreenCount", flags2);
+
+                if (_isScreenOpenProp != null)
+                {
+                    ModEntry.Logger.Info("[DraftInputHandler] Found IsScreenOpen on RunManager directly.");
+                }
+            }
+        }
+        catch (System.Exception ex)
+        {
+            ModEntry.Logger.Error($"[DraftInputHandler] Reflection init failed: {ex.Message}");
+            _reflectionFailed = true;
+        }
+    }
+
+    /// <summary>
+    /// Obtain the NRunSubmenuStack instance via reflection.
+    /// Path: RunManager.Instance → .Run (NRun node) → .SubmenuStack (NRunSubmenuStack)
+    /// Falls back to searching RunManager for direct IsScreenOpen property.
+    /// </summary>
+    private object? ObtainSubmenuStackViaReflection()
+    {
+        try
+        {
+            var runManager = MegaCrit.Sts2.Core.Runs.RunManager.Instance;
+            if (runManager == null) return null;
+
+            var rmType = runManager.GetType();
+            var flags = System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.Public |
+                        System.Reflection.BindingFlags.NonPublic;
+
+            // If IsScreenOpen is directly on RunManager, use RunManager as the target
+            if (_isScreenOpenProp != null && _isScreenOpenProp.DeclaringType == rmType)
+            {
+                return runManager;
+            }
+
+            // Try to get RunManager.Run → NRun
+            var runProp = rmType.GetProperty("Run", flags);
+            if (runProp == null)
+            {
+                // Try CurrentRunNode as alternative
+                runProp = rmType.GetProperty("CurrentRunNode", flags);
+            }
+
+            if (runProp != null)
+            {
+                var nRun = runProp.GetValue(runManager);
+                if (nRun == null) return null;
+
+                if (nRun is GodotObject goRun && !GodotObject.IsInstanceValid(goRun))
+                    return null;
+
+                // Get SubmenuStack from NRun
+                var nRunType = nRun.GetType();
+                var submenuStackProp = nRunType.GetProperty("SubmenuStack", flags);
+                if (submenuStackProp != null)
+                {
+                    var stack = submenuStackProp.GetValue(nRun);
+                    if (stack != null)
+                    {
+                        // Re-discover IsScreenOpen and ScreenCount on the actual type
+                        if (_isScreenOpenProp == null)
+                        {
+                            var stackType = stack.GetType();
+                            _isScreenOpenProp = stackType.GetProperty("IsScreenOpen", flags);
+                            _screenCountProp = stackType.GetProperty("ScreenCount", flags);
+                            ModEntry.Logger.Info(
+                                $"[DraftInputHandler] Discovered props on {stackType.Name}: " +
+                                $"IsScreenOpen={_isScreenOpenProp != null}, ScreenCount={_screenCountProp != null}");
+                        }
+                        return stack;
+                    }
+                }
+
+                // Fallback: check if NRun itself has IsScreenOpen
+                var nRunIsScreenOpen = nRunType.GetProperty("IsScreenOpen", flags);
+                if (nRunIsScreenOpen != null)
+                {
+                    _isScreenOpenProp = nRunIsScreenOpen;
+                    ModEntry.Logger.Info("[DraftInputHandler] Found IsScreenOpen directly on NRun.");
+                    return nRun;
+                }
+            }
+
+            // Last resort: use RunManager itself if it has ScreenCount/IsScreenOpen
+            var rmScreenCount = rmType.GetProperty("ScreenCount", flags);
+            if (rmScreenCount != null)
+            {
+                _screenCountProp = rmScreenCount;
+                ModEntry.Logger.Info("[DraftInputHandler] Using RunManager.ScreenCount as fallback.");
+                return runManager;
+            }
+
+            ModEntry.Logger.Info("[DraftInputHandler] Could not find any screen state API via reflection.");
+            return null;
+        }
+        catch (System.Exception ex)
+        {
+            ModEntry.Logger.Info($"[DraftInputHandler] ObtainSubmenuStack error: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Lightweight check for settings popup window.
+    /// NSettingsScreenPopup is sometimes shown independently of the submenu stack.
+    /// Only checks direct children of root (depth 1) for performance.
+    /// </summary>
+    private bool HasSettingsPopupVisible()
+    {
+        try
+        {
+            var root = GetTree()?.Root;
+            if (root == null) return false;
+
+            foreach (var child in root.GetChildren())
+            {
+                if (!GodotObject.IsInstanceValid(child)) continue;
+
+                // Check for settings popup by node name
+                string nodeName = child.Name;
+                if (nodeName.Contains("SettingsScreenPopup") ||
+                    nodeName.Contains("NSettingsScreenPopup"))
+                {
+                    if (child is Control ctrl && ctrl.Visible)
+                        return true;
+                    if (child is CanvasLayer cl && cl.Visible)
+                        return true;
+                }
+            }
+
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Reset the cached submenu stack reference. Call when the run ends or resets.
+    /// </summary>
+    public void ResetSubmenuStackCache()
+    {
+        _cachedSubmenuStack = null;
+        _isScreenOpenProp = null;
+        _screenCountProp = null;
+        _reflectionInitialized = false;
+        _reflectionFailed = false;
     }
 }

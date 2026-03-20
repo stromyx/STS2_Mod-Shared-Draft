@@ -8,3 +8,4 @@
 /Users/guyinan/CodeBuddy/20260316022439/SharedDraft/.godot/mono/temp/obj/Debug/refint/SharedDraft.dll
 /Users/guyinan/CodeBuddy/20260316022439/SharedDraft/.godot/mono/temp/obj/Debug/SharedDraft.pdb
 /Users/guyinan/CodeBuddy/20260316022439/SharedDraft/.godot/mono/temp/obj/Debug/ref/SharedDraft.dll
+/Users/guyinan/CodeBuddy/20260316022439/SharedDraft/.godot/mono/temp/obj/Debug/SharedDraft.sourcelink.json
