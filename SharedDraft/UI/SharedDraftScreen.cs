@@ -66,6 +66,8 @@ public static class SharedDraftScreen
     private static Label? _countdownLabel;
 
     // ── Toggle visibility button (hide/show the draft overlay without changing draft state) ──
+    // Lives on a separate CanvasLayer so it stays visible when main overlay is hidden
+    private static CanvasLayer? _toggleCanvasLayer;
     private static Button? _toggleVisibilityButton;
     private static bool _isManuallyHidden = false;  // True when user clicked the toggle button to hide
 
@@ -165,12 +167,18 @@ public static class SharedDraftScreen
 
         if (_canvasLayer != null)
             _canvasLayer.Visible = true;
+        if (_dimBackground != null)
+            _dimBackground.Visible = true;
+        if (_toggleCanvasLayer != null)
+            _toggleCanvasLayer.Visible = true;
     }
 
     public static void Hide()
     {
         if (_canvasLayer != null && GodotObject.IsInstanceValid(_canvasLayer))
             _canvasLayer.Visible = false;
+        if (_toggleCanvasLayer != null && GodotObject.IsInstanceValid(_toggleCanvasLayer))
+            _toggleCanvasLayer.Visible = false;
     }
 
     public static void RefreshPlayerStatus()
@@ -422,6 +430,9 @@ public static class SharedDraftScreen
         _inputHandler = new DraftInputHandler();
         _inputHandler.Name = "DraftInputHandler";
         _canvasLayer.AddChild(_inputHandler);
+
+        // ── Toggle visibility button on separate CanvasLayer ──
+        BuildToggleButton();
     }
 
     private static void BuildTitleBar(VBoxContainer parent)
@@ -525,43 +536,6 @@ public static class SharedDraftScreen
 
     private static void BuildBottomSection(VBoxContainer parent)
     {
-        // ── Toggle visibility button (hide/show draft overlay to access game UI) ──
-        _toggleVisibilityButton = new Button();
-        _toggleVisibilityButton.Text = "👁  Hide Draft  (View Map / Deck)";
-        _toggleVisibilityButton.AddThemeFontSizeOverride("font_size", 13);
-        _toggleVisibilityButton.SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter;
-        _toggleVisibilityButton.CustomMinimumSize = new Vector2(280, 32);
-
-        // Semi-transparent style — minimal visual footprint
-        var toggleNormal = new StyleBoxFlat();
-        toggleNormal.BgColor = new Color(0.15f, 0.13f, 0.25f, 0.6f);
-        toggleNormal.BorderColor = new Color(0.4f, 0.35f, 0.6f, 0.4f);
-        toggleNormal.SetBorderWidthAll(1);
-        toggleNormal.SetCornerRadiusAll(6);
-        toggleNormal.SetContentMarginAll(6);
-        _toggleVisibilityButton.AddThemeStyleboxOverride("normal", toggleNormal);
-
-        var toggleHover = new StyleBoxFlat();
-        toggleHover.BgColor = new Color(0.20f, 0.17f, 0.32f, 0.8f);
-        toggleHover.BorderColor = new Color(0.5f, 0.45f, 0.7f, 0.7f);
-        toggleHover.SetBorderWidthAll(1);
-        toggleHover.SetCornerRadiusAll(6);
-        toggleHover.SetContentMarginAll(6);
-        _toggleVisibilityButton.AddThemeStyleboxOverride("hover", toggleHover);
-
-        var togglePressed = new StyleBoxFlat();
-        togglePressed.BgColor = new Color(0.12f, 0.10f, 0.20f, 0.8f);
-        togglePressed.BorderColor = new Color(0.5f, 0.45f, 0.7f, 0.7f);
-        togglePressed.SetBorderWidthAll(1);
-        togglePressed.SetCornerRadiusAll(6);
-        togglePressed.SetContentMarginAll(6);
-        _toggleVisibilityButton.AddThemeStyleboxOverride("pressed", togglePressed);
-
-        _toggleVisibilityButton.AddThemeColorOverride("font_color", new Color(0.75f, 0.72f, 0.85f));
-        _toggleVisibilityButton.AddThemeColorOverride("font_hover_color", new Color(0.9f, 0.88f, 0.95f));
-        _toggleVisibilityButton.Pressed += OnToggleVisibilityPressed;
-        parent.AddChild(_toggleVisibilityButton);
-
         // Status label (centered at bottom)
         _statusLabel = new Label();
         _statusLabel.Text = "";
@@ -578,6 +552,70 @@ public static class SharedDraftScreen
         _countdownLabel.HorizontalAlignment = HorizontalAlignment.Center;
         _countdownLabel.Visible = false;
         parent.AddChild(_countdownLabel);
+    }
+
+    /// <summary>
+    /// Build the toggle visibility button on a SEPARATE CanvasLayer (Layer=2)
+    /// so it remains visible even when the main draft overlay (_dimBackground) is hidden.
+    /// Simple transparent button with "Hide" / "Show" text, positioned at bottom center.
+    /// </summary>
+    private static void BuildToggleButton()
+    {
+        _toggleCanvasLayer = new CanvasLayer();
+        _toggleCanvasLayer.Name = "DraftToggleLayer";
+        _toggleCanvasLayer.Layer = 2;  // Above the main draft overlay (Layer=1)
+        _toggleCanvasLayer.Visible = false;  // Controlled by Show()/Hide()
+
+        _toggleVisibilityButton = new Button();
+        _toggleVisibilityButton.Text = "Hide";
+        _toggleVisibilityButton.AddThemeFontSizeOverride("font_size", 14);
+
+        // Simple fully-transparent style — no background, no border
+        var transparentStyle = new StyleBoxFlat();
+        transparentStyle.BgColor = new Color(0, 0, 0, 0);  // Fully transparent
+        transparentStyle.BorderColor = new Color(0, 0, 0, 0);
+        transparentStyle.SetBorderWidthAll(0);
+        transparentStyle.SetCornerRadiusAll(0);
+        transparentStyle.SetContentMarginAll(8);
+        _toggleVisibilityButton.AddThemeStyleboxOverride("normal", transparentStyle);
+
+        var hoverStyle = new StyleBoxFlat();
+        hoverStyle.BgColor = new Color(1, 1, 1, 0.08f);  // Very subtle hover
+        hoverStyle.BorderColor = new Color(0, 0, 0, 0);
+        hoverStyle.SetBorderWidthAll(0);
+        hoverStyle.SetCornerRadiusAll(4);
+        hoverStyle.SetContentMarginAll(8);
+        _toggleVisibilityButton.AddThemeStyleboxOverride("hover", hoverStyle);
+
+        var pressedStyle = new StyleBoxFlat();
+        pressedStyle.BgColor = new Color(1, 1, 1, 0.12f);
+        pressedStyle.BorderColor = new Color(0, 0, 0, 0);
+        pressedStyle.SetBorderWidthAll(0);
+        pressedStyle.SetCornerRadiusAll(4);
+        pressedStyle.SetContentMarginAll(8);
+        _toggleVisibilityButton.AddThemeStyleboxOverride("pressed", pressedStyle);
+
+        _toggleVisibilityButton.AddThemeColorOverride("font_color", new Color(0.7f, 0.7f, 0.7f, 0.7f));
+        _toggleVisibilityButton.AddThemeColorOverride("font_hover_color", new Color(0.9f, 0.9f, 0.9f, 0.9f));
+        _toggleVisibilityButton.AddThemeColorOverride("font_pressed_color", new Color(1f, 1f, 1f, 1f));
+
+        // Position at bottom center of screen
+        _toggleVisibilityButton.AnchorLeft = 0.5f;
+        _toggleVisibilityButton.AnchorRight = 0.5f;
+        _toggleVisibilityButton.AnchorTop = 1.0f;
+        _toggleVisibilityButton.AnchorBottom = 1.0f;
+        _toggleVisibilityButton.OffsetLeft = -40;
+        _toggleVisibilityButton.OffsetRight = 40;
+        _toggleVisibilityButton.OffsetTop = -42;
+        _toggleVisibilityButton.OffsetBottom = -10;
+        _toggleVisibilityButton.GrowHorizontal = Control.GrowDirection.Both;
+        _toggleVisibilityButton.GrowVertical = Control.GrowDirection.Begin;
+
+        // MouseFilter=Stop so the button consumes clicks
+        _toggleVisibilityButton.MouseFilter = Control.MouseFilterEnum.Stop;
+
+        _toggleVisibilityButton.Pressed += OnToggleVisibilityPressed;
+        _toggleCanvasLayer.AddChild(_toggleVisibilityButton);
     }
 
     // ═══════════════════════════════════════════════
@@ -1822,6 +1860,8 @@ public static class SharedDraftScreen
                 return;
             }
             sceneTree.Root.CallDeferred("add_child", _canvasLayer);
+            if (_toggleCanvasLayer != null)
+                sceneTree.Root.CallDeferred("add_child", _toggleCanvasLayer);
             ModEntry.Logger.Info("SharedDraftScreen injected into scene tree (deferred).");
         }
         catch (System.Exception ex)
@@ -1841,8 +1881,11 @@ public static class SharedDraftScreen
 
         if (_canvasLayer != null && GodotObject.IsInstanceValid(_canvasLayer))
             _canvasLayer.QueueFree();
+        if (_toggleCanvasLayer != null && GodotObject.IsInstanceValid(_toggleCanvasLayer))
+            _toggleCanvasLayer.QueueFree();
 
         _canvasLayer = null;
+        _toggleCanvasLayer = null;
         _dimBackground = null;
         _cardGrid = null;
         _sidebarContainer = null;
@@ -1953,8 +1996,7 @@ public static class SharedDraftScreen
 
     /// <summary>
     /// Update the toggle button text based on current visibility state.
-    /// When draft is visible: "Hide Draft (View Map / Deck)"
-    /// When draft is hidden: "Show Draft"
+    /// Simple "Hide" / "Show" text.
     /// </summary>
     private static void UpdateToggleButton()
     {
@@ -1963,16 +2005,15 @@ public static class SharedDraftScreen
 
         if (_isManuallyHidden)
         {
-            _toggleVisibilityButton.Text = "🃏  Show Draft";
-            // Make more prominent when hidden
-            _toggleVisibilityButton.AddThemeColorOverride("font_color", AccentGold);
+            _toggleVisibilityButton.Text = "Show";
+            _toggleVisibilityButton.AddThemeColorOverride("font_color", new Color(0.9f, 0.85f, 0.5f, 0.9f));
             _toggleVisibilityButton.AddThemeColorOverride("font_hover_color", new Color(1.0f, 0.95f, 0.7f));
         }
         else
         {
-            _toggleVisibilityButton.Text = "👁  Hide Draft  (View Map / Deck)";
-            _toggleVisibilityButton.AddThemeColorOverride("font_color", new Color(0.75f, 0.72f, 0.85f));
-            _toggleVisibilityButton.AddThemeColorOverride("font_hover_color", new Color(0.9f, 0.88f, 0.95f));
+            _toggleVisibilityButton.Text = "Hide";
+            _toggleVisibilityButton.AddThemeColorOverride("font_color", new Color(0.7f, 0.7f, 0.7f, 0.7f));
+            _toggleVisibilityButton.AddThemeColorOverride("font_hover_color", new Color(0.9f, 0.9f, 0.9f, 0.9f));
         }
     }
 
@@ -2002,6 +2043,8 @@ public static class SharedDraftScreen
         // Step 1: Hide the overlay
         if (_canvasLayer != null && GodotObject.IsInstanceValid(_canvasLayer))
             _canvasLayer.Visible = false;
+        if (_toggleCanvasLayer != null && GodotObject.IsInstanceValid(_toggleCanvasLayer))
+            _toggleCanvasLayer.Visible = false;
 
         ModEntry.Logger.Info("[SharedDraft] Overlay hidden for pause menu (Escape pressed).");
 
@@ -2093,6 +2136,12 @@ public static class SharedDraftScreen
 
         if (_canvasLayer != null && GodotObject.IsInstanceValid(_canvasLayer))
             _canvasLayer.Visible = true;
+        if (_toggleCanvasLayer != null && GodotObject.IsInstanceValid(_toggleCanvasLayer))
+            _toggleCanvasLayer.Visible = true;
+
+        // If was manually hidden before pause menu, keep dimBackground hidden
+        if (_isManuallyHidden && _dimBackground != null && GodotObject.IsInstanceValid(_dimBackground))
+            _dimBackground.Visible = false;
 
         ModEntry.Logger.Info("[SharedDraft] Overlay restored after pause menu closed.");
     }
@@ -2130,6 +2179,8 @@ public static class SharedDraftScreen
 
         if (_canvasLayer != null && GodotObject.IsInstanceValid(_canvasLayer))
             _canvasLayer.Visible = false;
+        if (_toggleCanvasLayer != null && GodotObject.IsInstanceValid(_toggleCanvasLayer))
+            _toggleCanvasLayer.Visible = false;
 
         ModEntry.Logger.Info("[SharedDraft] Auto-hidden: native game screen detected.");
     }
@@ -2145,8 +2196,17 @@ public static class SharedDraftScreen
         _isHiddenForNativeScreen = false;
 
         // Only restore if not also hidden for pause menu or card inspector
-        if (!_isPauseMenuOpen && _canvasLayer != null && GodotObject.IsInstanceValid(_canvasLayer))
-            _canvasLayer.Visible = true;
+        if (!_isPauseMenuOpen)
+        {
+            if (_canvasLayer != null && GodotObject.IsInstanceValid(_canvasLayer))
+                _canvasLayer.Visible = true;
+            if (_toggleCanvasLayer != null && GodotObject.IsInstanceValid(_toggleCanvasLayer))
+                _toggleCanvasLayer.Visible = true;
+
+            // If was manually hidden before native screen opened, keep dimBackground hidden
+            if (_isManuallyHidden && _dimBackground != null && GodotObject.IsInstanceValid(_dimBackground))
+                _dimBackground.Visible = false;
+        }
 
         ModEntry.Logger.Info("[SharedDraft] Restored: native game screen closed.");
     }
