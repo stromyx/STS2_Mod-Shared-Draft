@@ -118,9 +118,9 @@ public static class DraftResultOverlay
 
     private static string GetMoveName(RelicPickingFightMove move) => move switch
     {
-        RelicPickingFightMove.Rock => "石头",
-        RelicPickingFightMove.Paper => "布",
-        RelicPickingFightMove.Scissors => "剪刀",
+        RelicPickingFightMove.Rock => "Rock",
+        RelicPickingFightMove.Paper => "Paper",
+        RelicPickingFightMove.Scissors => "Scissors",
         _ => "???"
     };
 
@@ -263,7 +263,7 @@ public static class DraftResultOverlay
         _fightArena.AddChild(bannerPanel);
 
         _bannerLabel = new Label();
-        _bannerLabel.Text = $"⚔️  争夺卡牌：{cardName}  ⚔️";
+        _bannerLabel.Text = $"⚔️  Contested Card: {cardName}  ⚔️";
         _bannerLabel.AddThemeFontSizeOverride("font_size", 22);
         _bannerLabel.AddThemeColorOverride("font_color", AccentGold);
         _bannerLabel.HorizontalAlignment = HorizontalAlignment.Center;

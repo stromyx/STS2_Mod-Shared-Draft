@@ -65,6 +65,10 @@ public static class SharedDraftScreen
     private static readonly Dictionary<int, Control> _playerAvatarContainers = new();
     private static Label? _countdownLabel;
 
+    // ── Toggle visibility button (hide/show the draft overlay without changing draft state) ──
+    private static Button? _toggleVisibilityButton;
+    private static bool _isManuallyHidden = false;  // True when user clicked the toggle button to hide
+
     // ── Input handler for Escape key (to open game pause menu) ──
     private static DraftInputHandler? _inputHandler;
     private static bool _isPauseMenuOpen = false;
@@ -154,8 +158,10 @@ public static class SharedDraftScreen
         PopulatePlayerStatus();
         _selectedDraftId = -1;
         _isInWaitingState = false;
+        _isManuallyHidden = false;
         UpdateSelectedInfo();
         UpdateConfirmButton();
+        UpdateToggleButton();
 
         if (_canvasLayer != null)
             _canvasLayer.Visible = true;
@@ -219,10 +225,10 @@ public static class SharedDraftScreen
                     statusColor = StatusWaiting;
                 }
 
-                string suffix = isLocal ? " (你)" : "";
-                string completedSuffix = ps.IsCompleted && ps.IsOptedOut ? " [已跳过]"
-                    : ps.IsCompleted ? " [已获卡]"
-                    : ps.IsOptedOut ? " [暂时跳过]"
+                string suffix = isLocal ? " (You)" : "";
+                string completedSuffix = ps.IsCompleted && ps.IsOptedOut ? " [Skipped]"
+                    : ps.IsCompleted ? " [Awarded]"
+                    : ps.IsOptedOut ? " [Paused]"
                     : "";
                 label.Text = $"{statusIcon} {ps.DisplayName}{suffix}{completedSuffix}";
                 label.AddThemeColorOverride("font_color", statusColor);
@@ -274,7 +280,7 @@ public static class SharedDraftScreen
         _selectedDraftId = -1;
         _isInWaitingState = false;
 
-        SetStatus("你在猜拳中输了，请重新选择一张卡牌。", new Color(1.0f, 0.6f, 0.3f));
+        SetStatus("You lost the tiebreaker. Please select another card.", new Color(1.0f, 0.6f, 0.3f));
 
         // Enable non-awarded cards, grey out awarded ones
         var manager = SharedDraftManager.Instance;
@@ -427,8 +433,8 @@ public static class SharedDraftScreen
 
         _titleLabel = new Label();
         _titleLabel.Text = SharedDraftConfig.DebugMode
-            ? "🃏  共  享  选  卡  [DEBUG]"
-            : "🃏  共  享  选  卡";
+            ? "🃏  S H A R E D   D R A F T  [DEBUG]"
+            : "🃏  S H A R E D   D R A F T";
         _titleLabel.AddThemeFontSizeOverride("font_size", 24);
         _titleLabel.AddThemeColorOverride("font_color", AccentGold);
         _titleLabel.HorizontalAlignment = HorizontalAlignment.Center;
@@ -458,7 +464,7 @@ public static class SharedDraftScreen
 
         // Sidebar title
         var sidebarTitle = new Label();
-        sidebarTitle.Text = "👥 玩家状态";
+        sidebarTitle.Text = "👥 Players";
         sidebarTitle.AddThemeFontSizeOverride("font_size", 16);
         sidebarTitle.AddThemeColorOverride("font_color", AccentPurple);
         sidebarTitle.HorizontalAlignment = HorizontalAlignment.Center;
@@ -474,7 +480,7 @@ public static class SharedDraftScreen
 
         // Selected card info label
         _selectedInfoLabel = new Label();
-        _selectedInfoLabel.Text = "未选择卡牌";
+        _selectedInfoLabel.Text = "No card selected";
         _selectedInfoLabel.AddThemeFontSizeOverride("font_size", 13);
         _selectedInfoLabel.AddThemeColorOverride("font_color", TextDim);
         _selectedInfoLabel.HorizontalAlignment = HorizontalAlignment.Center;
@@ -482,7 +488,7 @@ public static class SharedDraftScreen
         buttonSection.AddChild(_selectedInfoLabel);
 
         _confirmButton = Create3DButton(
-            "✓  确认选择",
+            "✓  Confirm",
             new Color(0.15f, 0.5f, 0.2f, 0.9f),
             new Color(0.2f, 0.65f, 0.28f, 1.0f),
             new Color(0.08f, 0.25f, 0.1f, 0.5f),
@@ -494,7 +500,7 @@ public static class SharedDraftScreen
         buttonSection.AddChild(_confirmButton);
 
         _skipButton = Create3DButton(
-            "跳过",
+            "Skip Draft",
             new Color(0.45f, 0.3f, 0.15f, 0.85f),
             new Color(0.6f, 0.4f, 0.2f, 0.95f),
             new Color(0.2f, 0.15f, 0.08f, 0.5f),
@@ -505,7 +511,7 @@ public static class SharedDraftScreen
         buttonSection.AddChild(_skipButton);
 
         _endDraftButton = Create3DButton(
-            "⚡ 结束选牌",
+            "⚡ Skip Waiting",
             new Color(0.55f, 0.15f, 0.15f, 0.85f),
             new Color(0.7f, 0.2f, 0.2f, 0.95f),
             new Color(0.25f, 0.08f, 0.08f, 0.5f),
@@ -513,12 +519,49 @@ public static class SharedDraftScreen
         _endDraftButton.CustomMinimumSize = new Vector2(0, 40);
         _endDraftButton.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         _endDraftButton.Pressed += OnEndDraftPressed;
-        _endDraftButton.TooltipText = "立即开始结算（只结算已选择的玩家）";
+        _endDraftButton.TooltipText = "Start settlement immediately (only confirmed players count)";
         buttonSection.AddChild(_endDraftButton);
     }
 
     private static void BuildBottomSection(VBoxContainer parent)
     {
+        // ── Toggle visibility button (hide/show draft overlay to access game UI) ──
+        _toggleVisibilityButton = new Button();
+        _toggleVisibilityButton.Text = "👁  Hide Draft  (View Map / Deck)";
+        _toggleVisibilityButton.AddThemeFontSizeOverride("font_size", 13);
+        _toggleVisibilityButton.SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter;
+        _toggleVisibilityButton.CustomMinimumSize = new Vector2(280, 32);
+
+        // Semi-transparent style — minimal visual footprint
+        var toggleNormal = new StyleBoxFlat();
+        toggleNormal.BgColor = new Color(0.15f, 0.13f, 0.25f, 0.6f);
+        toggleNormal.BorderColor = new Color(0.4f, 0.35f, 0.6f, 0.4f);
+        toggleNormal.SetBorderWidthAll(1);
+        toggleNormal.SetCornerRadiusAll(6);
+        toggleNormal.SetContentMarginAll(6);
+        _toggleVisibilityButton.AddThemeStyleboxOverride("normal", toggleNormal);
+
+        var toggleHover = new StyleBoxFlat();
+        toggleHover.BgColor = new Color(0.20f, 0.17f, 0.32f, 0.8f);
+        toggleHover.BorderColor = new Color(0.5f, 0.45f, 0.7f, 0.7f);
+        toggleHover.SetBorderWidthAll(1);
+        toggleHover.SetCornerRadiusAll(6);
+        toggleHover.SetContentMarginAll(6);
+        _toggleVisibilityButton.AddThemeStyleboxOverride("hover", toggleHover);
+
+        var togglePressed = new StyleBoxFlat();
+        togglePressed.BgColor = new Color(0.12f, 0.10f, 0.20f, 0.8f);
+        togglePressed.BorderColor = new Color(0.5f, 0.45f, 0.7f, 0.7f);
+        togglePressed.SetBorderWidthAll(1);
+        togglePressed.SetCornerRadiusAll(6);
+        togglePressed.SetContentMarginAll(6);
+        _toggleVisibilityButton.AddThemeStyleboxOverride("pressed", togglePressed);
+
+        _toggleVisibilityButton.AddThemeColorOverride("font_color", new Color(0.75f, 0.72f, 0.85f));
+        _toggleVisibilityButton.AddThemeColorOverride("font_hover_color", new Color(0.9f, 0.88f, 0.95f));
+        _toggleVisibilityButton.Pressed += OnToggleVisibilityPressed;
+        parent.AddChild(_toggleVisibilityButton);
+
         // Status label (centered at bottom)
         _statusLabel = new Label();
         _statusLabel.Text = "";
@@ -949,7 +992,7 @@ public static class SharedDraftScreen
 
         var descLabel = new Label();
         descLabel.MouseFilter = Control.MouseFilterEnum.Ignore;
-        descLabel.Text = "(对方角色的卡牌)";
+        descLabel.Text = "(Other player's card)";
         descLabel.AddThemeFontSizeOverride("font_size", 11);
         descLabel.AddThemeColorOverride("font_color", TextSecondary);
         descLabel.HorizontalAlignment = HorizontalAlignment.Center;
@@ -1077,7 +1120,7 @@ public static class SharedDraftScreen
                 conflictIcon.Text = "⚔️";
                 conflictIcon.AddThemeFontSizeOverride("font_size", 18);
                 conflictIcon.Position = new Vector2(CellSize.X - 30, 4);
-                conflictIcon.TooltipText = $"冲突！{players.Count} 名玩家选择了同一张卡";
+                conflictIcon.TooltipText = $"Conflict! {players.Count} players chose the same card";
                 overlayContainer.AddChild(conflictIcon);
                 overlays.Add((-1, conflictIcon)); // -1 = conflict indicator (not a player)
 
@@ -1155,7 +1198,7 @@ public static class SharedDraftScreen
                 catch { /* Outline node may not exist */ }
 
                 // Tooltip
-                voteIcon.TooltipText = isLocal ? $"{displayName} (你)" : displayName;
+                voteIcon.TooltipText = isLocal ? $"{displayName} (You)" : displayName;
 
                 // Animate entry: fade in + slide up (like NMultiplayerVoteContainer.AnimVoteIn)
                 // NOTE: Cannot call CreateTween() here — the node hasn't been added to the
@@ -1231,7 +1274,7 @@ public static class SharedDraftScreen
                 container.MoveChild(glowPanel, 0);
             }
 
-            iconRect.TooltipText = isLocal ? $"{displayName} (你)" : displayName;
+            iconRect.TooltipText = isLocal ? $"{displayName} (You)" : displayName;
 
             // Animate entry: fade in + slide up
             container.Modulate = new Color(1, 1, 1, 0);
@@ -1278,7 +1321,7 @@ public static class SharedDraftScreen
             initial.VerticalAlignment = VerticalAlignment.Center;
             container.AddChild(initial);
 
-            container.TooltipText = isLocal ? $"{displayName} (你)" : displayName;
+            container.TooltipText = isLocal ? $"{displayName} (You)" : displayName;
 
             return container;
         }
@@ -1395,7 +1438,7 @@ public static class SharedDraftScreen
 
             // Player name
             var nameLabel = new Label();
-            nameLabel.Text = ps.DisplayName + (isLocal ? " (你)" : "");
+            nameLabel.Text = ps.DisplayName + (isLocal ? " (You)" : "");
             nameLabel.AddThemeFontSizeOverride("font_size", 13);
             nameLabel.AddThemeColorOverride("font_color",
                 isLocal ? AccentGold : TextPrimary);
@@ -1405,7 +1448,7 @@ public static class SharedDraftScreen
 
             // Status label
             var statusLabel = new Label();
-            statusLabel.Text = "⏳ 等待中...";
+            statusLabel.Text = "⏳ Waiting...";
             statusLabel.AddThemeFontSizeOverride("font_size", 11);
             statusLabel.AddThemeColorOverride("font_color", StatusWaiting);
             playerVBox.AddChild(statusLabel);
@@ -1465,11 +1508,11 @@ public static class SharedDraftScreen
     {
         if (_selectedDraftId < 0)
         {
-            SetStatus("⚠ 请先选择一张卡牌！", new Color(1, 0.4f, 0.4f));
+            SetStatus("⚠ Please select a card first!", new Color(1, 0.4f, 0.4f));
             return;
         }
 
-        SetStatus("已确认选择，等待其他玩家...", StatusReady);
+        SetStatus("Selection confirmed. Waiting for other players...", StatusReady);
 
         if (_confirmButton != null)
             _confirmButton.Disabled = true;
@@ -1495,7 +1538,7 @@ public static class SharedDraftScreen
 
     private static void OnEndDraftPressed()
     {
-        SetStatus("⚡ 已请求结束选牌，等待结算...", new Color(1.0f, 0.6f, 0.3f));
+        SetStatus("⚡ Skip requested. Waiting for settlement...", new Color(1.0f, 0.6f, 0.3f));
 
         if (_endDraftButton != null)
             _endDraftButton.Disabled = true;
@@ -1525,7 +1568,7 @@ public static class SharedDraftScreen
     {
         _isInWaitingState = true;
 
-        SetStatus("⏳ 结算进行中，请等待...", new Color(1.0f, 0.7f, 0.3f));
+        SetStatus("⏳ Settlement in progress, please wait...", new Color(1.0f, 0.7f, 0.3f));
 
         foreach (var (_, cell) in _cardCells)
         {
@@ -1550,7 +1593,7 @@ public static class SharedDraftScreen
     {
         _isInWaitingState = false;
 
-        SetStatus("从共享卡池中选择一张卡牌。", new Color(0.7f, 0.8f, 0.9f));
+        SetStatus("Select a card from the shared pool.", new Color(0.7f, 0.8f, 0.9f));
 
         // Enable cards that are not yet awarded
         var manager = SharedDraftManager.Instance;
@@ -1590,7 +1633,7 @@ public static class SharedDraftScreen
     {
         if (_countdownLabel != null && GodotObject.IsInstanceValid(_countdownLabel))
         {
-            _countdownLabel.Text = $"⏱ 等待超时: {secondsLeft}s";
+            _countdownLabel.Text = $"⏱ Timeout: {secondsLeft}s";
 
             if (secondsLeft <= 10)
                 _countdownLabel.AddThemeColorOverride("font_color", new Color(1.0f, 0.4f, 0.3f));
@@ -1609,7 +1652,7 @@ public static class SharedDraftScreen
 
         if (_selectedDraftId < 0)
         {
-            _selectedInfoLabel.Text = "未选择卡牌";
+            _selectedInfoLabel.Text = "No card selected";
             _selectedInfoLabel.AddThemeColorOverride("font_color", TextDim);
         }
         else
@@ -1621,11 +1664,11 @@ public static class SharedDraftScreen
                 if (draftCard.HasCardModel)
                 {
                     string title = draftCard.Card!.Title ?? draftCard.CardEntry;
-                    _selectedInfoLabel.Text = $"已选择：{title}";
+                    _selectedInfoLabel.Text = $"Selected: {title}";
                 }
                 else
                 {
-                    _selectedInfoLabel.Text = $"已选择：{FormatEntryName(draftCard.CardEntry)} (对方角色的卡牌)";
+                    _selectedInfoLabel.Text = $"Selected: {FormatEntryName(draftCard.CardEntry)} (other player's card)";
                 }
                 _selectedInfoLabel.AddThemeColorOverride("font_color", AccentGold);
             }
@@ -1809,10 +1852,12 @@ public static class SharedDraftScreen
         _confirmButton = null;
         _skipButton = null;
         _endDraftButton = null;
+        _toggleVisibilityButton = null;
         _countdownLabel = null;
         _inputHandler = null;
         _isPauseMenuOpen = false;
         _isHiddenForNativeScreen = false;
+        _isManuallyHidden = false;
         _selectedDraftId = -1;
         _isInWaitingState = false;
         _cardCells.Clear();
@@ -1850,6 +1895,89 @@ public static class SharedDraftScreen
         }
         _nativeCards.Clear();
     }
+
+    // ═══════════════════════════════════════════════
+    //  TOGGLE VISIBILITY (manual hide/show)
+    // ═══════════════════════════════════════════════
+
+    /// <summary>
+    /// Toggle button pressed — hide or show the draft overlay without changing player state.
+    /// When hidden, the player can access the game's native map, deck viewer, settings, etc.
+    /// When shown again, the player returns to the draft screen.
+    ///
+    /// The toggle button itself is moved to a separate small CanvasLayer that stays visible
+    /// even when the main overlay is hidden, so the player can click it to come back.
+    /// </summary>
+    private static void OnToggleVisibilityPressed()
+    {
+        if (_isManuallyHidden)
+        {
+            ShowFromManualHide();
+        }
+        else
+        {
+            HideManually();
+        }
+    }
+
+    /// <summary>
+    /// Manually hide the draft overlay (user clicked the toggle button).
+    /// The draft state is preserved — the player is still in the drafting process.
+    /// A floating "Show Draft" button remains visible at the bottom of the screen.
+    /// </summary>
+    private static void HideManually()
+    {
+        _isManuallyHidden = true;
+
+        // Hide the main canvas content but keep the toggle button accessible
+        if (_dimBackground != null && GodotObject.IsInstanceValid(_dimBackground))
+            _dimBackground.Visible = false;
+
+        UpdateToggleButton();
+        ModEntry.Logger.Info("[SharedDraft] Manually hidden by user (toggle button).");
+    }
+
+    /// <summary>
+    /// Restore the draft overlay from manual hide.
+    /// </summary>
+    private static void ShowFromManualHide()
+    {
+        _isManuallyHidden = false;
+
+        if (_dimBackground != null && GodotObject.IsInstanceValid(_dimBackground))
+            _dimBackground.Visible = true;
+
+        UpdateToggleButton();
+        ModEntry.Logger.Info("[SharedDraft] Restored from manual hide (toggle button).");
+    }
+
+    /// <summary>
+    /// Update the toggle button text based on current visibility state.
+    /// When draft is visible: "Hide Draft (View Map / Deck)"
+    /// When draft is hidden: "Show Draft"
+    /// </summary>
+    private static void UpdateToggleButton()
+    {
+        if (_toggleVisibilityButton == null || !GodotObject.IsInstanceValid(_toggleVisibilityButton))
+            return;
+
+        if (_isManuallyHidden)
+        {
+            _toggleVisibilityButton.Text = "🃏  Show Draft";
+            // Make more prominent when hidden
+            _toggleVisibilityButton.AddThemeColorOverride("font_color", AccentGold);
+            _toggleVisibilityButton.AddThemeColorOverride("font_hover_color", new Color(1.0f, 0.95f, 0.7f));
+        }
+        else
+        {
+            _toggleVisibilityButton.Text = "👁  Hide Draft  (View Map / Deck)";
+            _toggleVisibilityButton.AddThemeColorOverride("font_color", new Color(0.75f, 0.72f, 0.85f));
+            _toggleVisibilityButton.AddThemeColorOverride("font_hover_color", new Color(0.9f, 0.88f, 0.95f));
+        }
+    }
+
+    /// <summary>Whether the draft overlay is currently manually hidden by the user.</summary>
+    public static bool IsManuallyHidden => _isManuallyHidden;
 
     // ═══════════════════════════════════════════════
     //  PAUSE MENU SUPPORT
